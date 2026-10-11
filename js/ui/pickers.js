@@ -4,11 +4,12 @@ import { openModal, select, field, toast, combo } from './widgets.js';
 import * as store from '../app/store.js';
 import { makeLedger, defaultTag, TAX_TAGS, ROOTS, ROOT_ORDER } from '../core/masters.js';
 import { fyList, fyRange, fyOf, today, fyShift, addDays } from '../lib/dates.js';
+import { t, groupName, ledgerName } from './terms.js';
 
 /* filter: 'money' (cash/bank), 'pay' (cash/bank/card), 'income', 'expense', 'invest', 'loanTaken', 'loanGiven', 'all', or a function */
 export function ledgerItems(ctx, filter = 'all') {
   const f = typeof filter === 'function' ? filter : FILTERS[filter] || FILTERS.all;
-  return ctx.ledgers.filter(l => !l.archived && f(l, ctx)).map(l => ({ id: l.id, label: l.name, group: (ctx.groupOf(l) || {}).name || '', alias: l.alias || '' }))
+  return ctx.ledgers.filter(l => !l.archived && f(l, ctx)).map(l => ({ id: l.id, label: ledgerName(l), group: groupName(ctx.groupOf(l)), alias: l.alias || '' }))
     .sort((a, b) => a.group.localeCompare(b.group) || a.label.localeCompare(b.label));
 }
 const nat = (l, c) => c.natureOf(l);
@@ -41,7 +42,7 @@ export function createLedgerDialog(entityId, name = '', root = '') {
     const groups = store.S.groups.filter(g => g.entityId === entityId && (!root || g.root === root))
       .sort((a, b) => ROOT_ORDER.indexOf(a.root) - ROOT_ORDER.indexOf(b.root) || a.order - b.order);
     const nm = h('input.inp', { value: name, autofocus: true });
-    const gs = select(groups.map(g => ({ value: g.id, label: ROOTS[g.root].name + ' › ' + g.name })), groups[0] && groups[0].id);
+    const gs = select(groups.map(g => ({ value: g.id, label: groupName(g) })), groups[0] && groups[0].id);
     const tagSel = select([], '');
     const fillTags = () => {
       const g = groups.find(x => x.id === gs.value);
@@ -55,11 +56,11 @@ export function createLedgerDialog(entityId, name = '', root = '') {
       if (!nm.value.trim()) { toast('Enter a name'); return; }
       const l = makeLedger({ entityId, groupId: gs.value, name: nm.value.trim(), taxTag: tagSel.value });
       await store.saveLedger(l);
-      done = true; md.close(); toast('Ledger created'); resolve(l.id);
+      done = true; md.close(); toast('Created'); resolve(l.id);
     };
     nm.addEventListener('keydown', e => { if (e.key === 'Enter') save(); });
     const md = openModal({
-      title: 'New ledger', body: h('div.grid', field('Name', nm), field('Group', gs), field('Tax tag', tagSel)),
+      title: t('New account / category', 'New ledger'), body: h('div.grid', field('Name', nm), field(t('Section', 'Group'), gs), field(t('Tax treatment', 'Tax tag'), tagSel)),
       foot: [h('button.btn', { onclick: () => md.close() }, 'Cancel'), h('button.btn.primary', { onclick: save }, 'Create')],
       onClose: () => { if (!done) resolve(null); }
     });
@@ -84,7 +85,7 @@ export function periodControl(onChange, { allowCompare = false } = {}) {
   currentPeriod();
   const wrap = h('div.btnrow');
   const fySel = select(fyList(6, 1).map(f => ({ value: f, label: 'FY ' + f })), period.fy, { class: 'inp sm', style: { width: 'auto' } });
-  const modeSel = select([{ value: 'fy', label: 'Financial year' }, { value: 'custom', label: 'Custom range' }], period.mode, { class: 'inp sm', style: { width: 'auto' } });
+  const modeSel = select([{ value: 'fy', label: 'Financial year' }, { value: 'custom', label: 'Choose dates' }], period.mode, { class: 'inp sm', style: { width: 'auto' } });
   const from = h('input.inp.sm', { type: 'date', value: period.from || fyRange(period.fy).from, style: { width: 'auto' } });
   const to = h('input.inp.sm', { type: 'date', value: period.to || today(), style: { width: 'auto' } });
   const cmp = h('label.check.small', h('input', { type: 'checkbox', checked: period.compare, onchange: e => { period.compare = e.target.checked; onChange(); } }), 'Compare with previous');

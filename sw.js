@@ -1,6 +1,6 @@
 /* DoctorWealth Books service worker: the whole app (code + bundled libraries) is cached so it opens and
    works with no network. A new version waits until the user taps "Reload" in the app. */
-const VERSION = '1.0.0';
+const VERSION = '1.1.0';
 const CACHE = 'dwb-' + VERSION;
 const SHELL = [
   './', './index.html', './manifest.webmanifest', './css/app.css',
@@ -10,8 +10,8 @@ const SHELL = [
   './js/core/books.js', './js/core/demo.js', './js/core/integrity.js', './js/core/legacy.js', './js/core/masters.js', './js/core/quick.js', './js/core/recurring.js', './js/core/vouchers.js',
   './js/import/libs.js', './js/import/statement-parse.js', './js/import/statement-plan.js', './js/import/zerodha.js',
   './js/lib/dates.js', './js/lib/money.js', './js/lib/util.js',
-  './js/ui/charts.js', './js/ui/dom.js', './js/ui/pickers.js', './js/ui/widgets.js',
-  './js/views/daybook.js', './js/views/dashboard.js', './js/views/entry.js', './js/views/importer.js', './js/views/masters.js', './js/views/reports.js', './js/views/settings.js',
+  './js/ui/charts.js', './js/ui/dom.js', './js/ui/pickers.js', './js/ui/terms.js', './js/ui/widgets.js',
+  './js/views/daybook.js', './js/views/dashboard.js', './js/views/entry.js', './js/views/family.js', './js/views/importer.js', './js/views/masters.js', './js/views/reports.js', './js/views/settings.js',
   './vendor/xlsx.full.min.js', './vendor/pdfjs/pdf.min.js', './vendor/pdfjs/pdf.worker.min.js'
 ];
 

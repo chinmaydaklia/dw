@@ -24,10 +24,10 @@ export function renderImport(root) {
       tile('⇪', 'Old DoctorWealth data', 'Bring across accounts, income, expenses, loans and investments — every balance is checked', () => importLegacy()),
       tile('📈', 'Zerodha tax P&L', 'taxpnl-….xlsx — realised gains, F&O and dividends per financial year', () => importTaxPnl()),
       tile('📊', 'Zerodha holdings', 'Kite holdings Excel — snapshot compared with your books', () => importHoldings()),
-      tile('↺', 'Restore backup', 'A DoctorWealth Books backup file (replaces all data)', () => restoreBackup())));
-  add(root, h('div.section-h', h('h2', 'Rules'), h('span.muted.small', 'keyword → ledger, applied to statement rows (you still review every row)'), h('span.spacer'), h('button.btn.sm', { onclick: () => editRule(null) }, '+ Rule')));
+      tile('↺', 'Restore backup', 'A backup file from this app (replaces everything)', () => restoreBackup())));
+  add(root, h('div.section-h', h('h2', 'Rules'), h('span.muted.small', 'a word in the bank description → category (you still check every row)'), h('span.spacer'), h('button.btn.sm', { onclick: () => editRule(null) }, '+ Rule')));
   const rules = S.rules.filter(r => r.entityId === e.id);
-  add(root, h('div.card', rules.length ? h('table.tbl', h('tbody', rules.map(r => h('tr.click', { onclick: () => editRule(r) }, h('td', '“' + r.pattern + '”'), h('td', (store.ledger(r.ledgerId) || {}).name || '(missing)'), h('td.small.muted', r.dir === 'debit' ? 'money out' : r.dir === 'credit' ? 'money in' : 'either'), h('td.r', r.off ? h('span.pill', 'off') : '')))))
+  add(root, h('div.card', rules.length ? h('table.tbl', h('tbody', rules.map(r => h('tr.click', { onclick: () => editRule(r) }, h('td', '“' + r.pattern + '”'), h('td', (store.ledger(r.ledgerId) || {}).name || '(deleted)'), h('td.small.muted', r.dir === 'debit' ? 'money out' : r.dir === 'credit' ? 'money in' : 'either'), h('td.r', r.off ? h('span.pill', 'off') : '')))))
     : h('div.empty', 'No rules yet. Create them from the ★ button while reviewing a statement.')));
   const batches = S.batches.filter(b => b.entityId === e.id).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   add(root, h('div.section-h', h('h2', 'Import history')), h('div.card', batches.length ? h('div.tbl-wrap', h('table.tbl', h('thead', h('tr', h('th', 'When'), h('th', 'What'), h('th.r', 'Entries'), h('th'))),
@@ -49,7 +49,7 @@ export function renderImport(root) {
   }
 }
 function batchLabel(b) {
-  if (b.kind === 'statement') return 'Statement → ' + ((store.ledger(b.ledgerId) || {}).name || '?') + ' · ' + (BANK_NAMES[b.bank] || b.bank || '') + (b.from ? ' · ' + fmtDate(b.from) + ' – ' + fmtDate(b.to) : '');
+  if (b.kind === 'statement') return 'Bank statement → ' + ((store.ledger(b.ledgerId) || {}).name || '?') + ' · ' + (BANK_NAMES[b.bank] || b.bank || '') + (b.from ? ' · ' + fmtDate(b.from) + ' – ' + fmtDate(b.to) : '');
   if (b.kind === 'legacy') return 'Old DoctorWealth data';
   return b.kind;
 }
@@ -75,7 +75,7 @@ export function importStatement(presetLedgerId, carry = {}) {
   const bankSel = select(Object.entries(BANK_NAMES).map(([k, v]) => ({ value: k, label: v })), st.bank, { onchange: e => { st.bank = e.target.value; } });
   const md = openModal({
     title: 'Import bank statement', sub: 'You will review and edit every row before anything is saved.',
-    body: h('div.grid', carry.error ? h('div.note.warn', carry.error) : null, field('This statement belongs to', lc), field('Bank format', bankSel), fileBtn, pwWrap),
+    body: h('div.grid', carry.error ? h('div.note.warn', carry.error) : null, field('Which bank account / card is this statement for?', lc), field('Bank format', bankSel), fileBtn, pwWrap),
     foot: [h('button.btn', { onclick: () => md.close() }, 'Cancel'), h('button.btn.primary', { onclick: go }, 'Read statement')]
   });
   if (carry.pwFocus) setTimeout(() => pw.focus(), 60);
@@ -126,18 +126,18 @@ function reviewStatement(args, res) {
   const adjChk = h('input', { type: 'checkbox', onchange: e => { adj.on = e.target.checked; upd(); } });
   const adjTxt = h('span');
   const adjWrap = h('label.check.small', adjChk, adjTxt);
-  const bulkSel = combo(items, '', id => { if (!id) return; let n = 0; for (const r of rows) if (r.sel) { r.counterId = id; n++; } toast(n ? 'Ledger set on ' + n + ' row(s)' : 'Tick rows in the ☐ column first'); bulkSel.set(''); draw(); }, { sm: true, placeholder: 'Set ledger for selected…' });
+  const bulkSel = combo(items, '', id => { if (!id) return; let n = 0; for (const r of rows) if (r.sel) { r.counterId = id; n++; } toast(n ? 'Category set on ' + n + ' row(s)' : 'Tick rows in the ☐ column first'); bulkSel.set(''); draw(); }, { sm: true, placeholder: 'Set category for ticked rows…' });
   const body = h('div',
     h('p.small.muted', { style: { marginTop: 0 } }, args.file.name + ' · ' + (BANK_NAMES[res.bank] || res.bank) + ' · ' + rows.length + ' rows · ' + fmtDate(res.from) + ' → ' + fmtDate(res.to)),
     sum,
-    res.guesses ? h('div.note.warn', { style: { margin: '8px 0' } }, res.guesses + ' row(s) had no running balance to confirm debit vs credit — check rows marked ⚠.') : null,
+    res.guesses ? h('div.note.warn', { style: { margin: '8px 0' } }, res.guesses + ' row(s): could not be sure if money came in or went out — check rows marked ⚠ (use ⇅ to flip).') : null,
     h('div.toolbar', { style: { margin: '10px 0 8px' } },
       h('button.btn.sm', { onclick: () => { for (const r of visible()) r.sel = true; draw(); } }, 'Select all shown'),
       h('button.btn.sm', { onclick: () => { for (const r of rows) r.sel = false; draw(); } }, 'Select none'),
       h('button.btn.sm', { onclick: () => { let n = 0; for (const r of rows) if (r.sel) { r.include = false; n++; } toast(n + ' excluded'); draw(); } }, 'Exclude selected'),
       h('div', { style: { width: '240px' } }, bulkSel),
       h('input.inp.sm', { placeholder: 'Filter rows…', style: { width: '200px' }, oninput: e => { filter = normNarr(e.target.value); draw(); } })),
-    h('div.tbl-wrap', { style: { maxHeight: '52vh', overflowY: 'auto' } }, h('table.tbl.rev-tbl', h('thead', h('tr', h('th', '✓'), h('th', '☐'), h('th', 'Date'), h('th', 'Narration'), h('th.r', 'Out'), h('th.r', 'In'), h('th', 'Ledger (other side)'), h('th'))), tbody)),
+    h('div.tbl-wrap', { style: { maxHeight: '52vh', overflowY: 'auto' } }, h('table.tbl.rev-tbl', h('thead', h('tr', h('th', '✓'), h('th', '☐'), h('th', 'Date'), h('th', 'Bank description'), h('th.r', 'Out'), h('th.r', 'In'), h('th', 'Category / where it went'), h('th'))), tbody)),
     more, h('div', { style: { marginTop: '8px' } }, adjWrap));
   function visible() { return filter ? rows.filter(r => normNarr(r.narration + ' ' + r.note).includes(filter)) : rows; }
   function draw() {
@@ -152,12 +152,12 @@ function reviewStatement(args, res) {
     const inc = h('input', { type: 'checkbox', checked: r.include, title: 'Import this row', onchange: e => { r.include = e.target.checked; tr.classList.toggle('off', !r.include); upd(); } });
     const sel = h('input', { type: 'checkbox', checked: !!r.sel, title: 'Select for bulk actions', onchange: e => { r.sel = e.target.checked; } });
     const cb = combo(items, r.counterId, id => { r.counterId = id; upd(); }, { sm: true });
-    const note = h('input.inp.sm', { value: r.note, oninput: e => { r.note = e.target.value; }, title: 'Narration saved on the entry' });
+    const note = h('input.inp.sm', { value: r.note, oninput: e => { r.note = e.target.value; }, title: 'Note saved with the entry' });
     const flags = [];
-    if (r.check === 'guess' || r.check === 'mismatch') flags.push(h('span.pill.warn', { title: 'Debit/credit not confirmed by the running balance' }, '⚠'));
+    if (r.check === 'guess' || r.check === 'mismatch') flags.push(h('span.pill.warn', { title: 'Not sure if money came in or went out' }, '⚠'));
     if (r.rule) flags.push(h('span.pill.gold', { title: 'Matched rule' }, '★ ' + r.rule));
-    if (r.dup) flags.push(h('span.pill.warn', { title: r.dup.voucher ? 'Already in books: ' + r.dup.voucher.no + ' ' + r.dup.voucher.date : 'Same as row #' + r.dup.row }, '⧉ duplicate'));
-    else if (r.soft) flags.push(h('span.pill.warn', { title: 'Similar entry already in books: ' + r.soft.voucher.no + ' ' + fmtDate(r.soft.voucher.date) + ' ' + (r.soft.voucher.narration || '') }, '≈ possible duplicate'));
+    if (r.dup) flags.push(h('span.pill.warn', { title: r.dup.voucher ? 'Already recorded on ' + fmtDate(r.dup.voucher.date) : 'Same as row #' + r.dup.row }, '⧉ duplicate'));
+    else if (r.soft) flags.push(h('span.pill.warn', { title: 'A similar entry already exists on ' + fmtDate(r.soft.voucher.date) + ' ' + (r.soft.voucher.narration || '') }, '≈ possible duplicate'));
     const flip = h('button.btn.ghost.sm', { title: 'Flip money in / out', onclick: () => { r.dir = r.dir === 'debit' ? 'credit' : 'debit'; r.check = 'flipped'; draw(); } }, '⇅');
     const star = h('button.btn.ghost.sm', { title: 'Make a rule from this row', onclick: () => editRule(null, { pattern: suggestKeyword(r.narration), ledgerId: r.counterId, dir: r.dir }, rule => {
       let n = 0; for (const x of rows) { const m = ruleMatch([rule], x.narration, x.dir); if (m) { x.counterId = rule.ledgerId; x.rule = rule.pattern; n++; } }
@@ -182,15 +182,15 @@ function reviewStatement(args, res) {
     add(clear(sum), h('div.rev-sum',
       kpiBox('Importing', n + ' of ' + rows.length, dupN ? dupN + ' duplicate(s) unticked' : 'no duplicates'),
       kpiBox('Money out / in', h('span', h('span.out', '−' + money(dr)), ' / ', h('span.in', '+' + money(cr)))),
-      kpiBox('Statement check', res.arith === null ? 'n/a' : res.arith === 0 ? h('span.in', '✓ adds up') : h('span.out', 'off ' + money(Math.abs(res.arith))), 'opening + in − out = closing'),
-      kpiBox('Reconciliation', res.closing == null ? 'n/a' : after === res.closing ? h('span.in', '✓ reconciles') : h('span.out', 'off ' + money(Math.abs(after - res.closing))), res.closing == null ? 'no closing balance in file' : 'books ' + drcr(after) + ' vs statement ' + drcr(res.closing))),
-      susp ? h('div.note.warn', susp + ' row(s) will go to Suspense — fine for now; reclassify later from the Suspense ledger or set a ledger here.') : null,
-      missing ? h('div.note.bad', missing + ' row(s) have no ledger.') : null);
+      kpiBox('Statement adds up?', res.arith === null ? 'n/a' : res.arith === 0 ? h('span.in', '✓ yes') : h('span.out', 'off ' + money(Math.abs(res.arith))), 'start + in − out = end'),
+      kpiBox('Matches bank balance?', res.closing == null ? 'n/a' : after === res.closing ? h('span.in', '✓ yes') : h('span.out', 'off ' + money(Math.abs(after - res.closing))), res.closing == null ? 'no closing balance in file' : 'app ' + money(after) + ' vs bank ' + money(res.closing))),
+      susp ? h('div.note.warn', susp + ' row(s) have no category yet and will go to “To sort later” — fine for now, you can sort them any time.') : null,
+      missing ? h('div.note.bad', missing + ' row(s) have no category.') : null);
     if (res.closing != null) {
       const base = before + delta - res.closing;
       if (!adj.on) adj.amount = -base;
       adjWrap.classList.toggle('hide', base === 0 && !adj.on);
-      add(clear(adjTxt), 'Also adjust ', h('b', L.name), '’s opening balance by ', h('b', money(adj.amount, { sign: true })), ' so it reconciles ', h('span.muted', '(use when the books did not have this account’s earlier history)'));
+      add(clear(adjTxt), 'Also adjust ', h('b', L.name), '’s starting balance by ', h('b', money(adj.amount, { sign: true })), ' so it matches the bank ', h('span.muted', '(use this when the app did not have this account’s earlier history)'));
     } else adjWrap.classList.add('hide');
     okBtn.textContent = 'Approve & post (' + n + ')';
   }
@@ -204,7 +204,7 @@ function reviewStatement(args, res) {
     const keep = rows.filter(r => r.include);
     if (!keep.length) return toast('Nothing selected to import');
     const bad = keep.find(r => !r.counterId || !r.amount || !r.date);
-    if (bad) return toast('Row dated ' + fmtDate(bad.date) + ' needs a ledger / amount / date');
+    if (bad) return toast('Row dated ' + fmtDate(bad.date) + ' needs a category / amount / date');
     const batch = makeBatch(c, { kind: 'statement', ledgerId: args.ledgerId, file: args.file.name, bank: res.bank, from: res.from, to: res.to, count: keep.length, opening: res.opening, closing: res.closing, openingAdj: adj.on ? adj.amount : 0 });
     const vouchers = keep.map(r => rowToVoucher(c, args.ledgerId, r, batch.id, res.bank));
     const extra = [{ store: 'batches', put: batch }];
@@ -216,7 +216,7 @@ function reviewStatement(args, res) {
     const recon = res.closing != null ? ledgerStatement(store.ctx(), args.ledgerId, { to: res.to }).closing - res.closing : null;
     const done = openModal({
       title: 'Imported ' + keep.length + ' entr' + (keep.length === 1 ? 'y' : 'ies'), body: h('div', h('p', args.file.name + ' → ' + L.name),
-        recon === null ? null : h('div', { class: 'note ' + (recon === 0 ? 'ok' : 'warn') }, recon === 0 ? '✓ Reconciles — the ledger on ' + fmtDate(res.to) + ' matches the statement closing balance.' : 'Off by ' + money(Math.abs(recon)) + ' against the statement closing balance. Look for missed or duplicate rows, or correct the opening balance.')),
+        recon === null ? null : h('div', { class: 'note ' + (recon === 0 ? 'ok' : 'warn') }, recon === 0 ? '✓ Matches — the account balance on ' + fmtDate(res.to) + ' is the same as the bank’s.' : 'Differs from the bank by ' + money(Math.abs(recon)) + '. Look for missed or repeated rows, or correct the starting balance.')),
       foot: [h('button.btn.danger', { onclick: () => { done.close(); undoBatch(store.S.batches.find(b => b.id === batch.id)); } }, 'Undo this import'), h('button.btn.primary', { onclick: () => done.close() }, 'Done')]
     });
   }
@@ -228,8 +228,8 @@ export async function undoBatch(b) {
   const vs = S.vouchers.filter(v => v.batchId === b.id);
   const ent = store.entityById(b.entityId);
   if (ent && ent.lockedUpto && vs.some(v => v.date <= ent.lockedUpto)) return toast('Some entries are in a locked year. Unlock it first.');
-  const extraTxt = b.kind === 'legacy' ? ' It also removes ledgers, rules, holdings and tax P&L it created, and reverts opening balances.' : b.openingAdj ? ' It also reverts the opening-balance adjustment.' : '';
-  if (!(await confirmBox('Undo this import?', 'Removes its ' + vs.length + ' entr' + (vs.length === 1 ? 'y' : 'ies') + ', including any you edited since.' + extraTxt, 'Undo import', true))) return;
+  const extraTxt = b.kind === 'legacy' ? ' It also removes accounts, rules, holdings and tax P&L it created, and puts starting balances back.' : b.openingAdj ? ' It also puts the starting balance back.' : '';
+  if (!(await confirmBox('Undo this import?', 'Removes its ' + vs.length + ' entr' + (vs.length === 1 ? 'y' : 'ies') + ', including any you changed since.' + extraTxt, 'Undo import', true))) return;
   const ops = vs.map(v => ({ store: 'vouchers', del: v.id }));
   if (b.kind === 'statement' && b.openingAdj) { const l = store.ledger(b.ledgerId); if (l) ops.push({ store: 'ledgers', put: { ...l, opening: (l.opening || 0) - b.openingAdj } }); }
   if (b.kind === 'legacy') {
@@ -253,12 +253,12 @@ export function editRule(rule, preset = {}, after) {
   const dir = select([{ value: 'any', label: 'Money in or out' }, { value: 'debit', label: 'Money out only' }, { value: 'credit', label: 'Money in only' }], st.dir);
   const off = h('input', { type: 'checkbox', checked: st.off });
   const md = openModal({
-    title: rule ? 'Edit rule' : 'New rule', sub: 'When a statement narration contains the keyword, this ledger is filled in for you.',
-    body: h('div.grid', field('Keyword', pat), field('Ledger', ledgerCombo(c, 'all', st.ledgerId, id => { st.ledgerId = id; })), field('Applies to', dir), rule ? h('label.check', off, 'Rule switched off') : null),
+    title: rule ? 'Edit rule' : 'New rule', sub: 'When the bank description contains this word, the category is filled in for you.',
+    body: h('div.grid', field('Word', pat), field('Category', ledgerCombo(c, 'all', st.ledgerId, id => { st.ledgerId = id; })), field('Applies to', dir), rule ? h('label.check', off, 'Rule switched off') : null),
     foot: [rule ? h('button.btn.danger.left', { onclick: async () => { await store.commit([{ store: 'rules', del: rule.id }]); md.close(); toast('Rule deleted'); } }, 'Delete') : null,
       h('button.btn', { onclick: () => md.close() }, 'Cancel'),
       h('button.btn.primary', { onclick: async () => {
-        if (!pat.value.trim() || !st.ledgerId) return toast('Keyword and ledger are required');
+        if (!pat.value.trim() || !st.ledgerId) return toast('Word and category are required');
         const rec = { ...(rule || { id: uid('rul'), entityId: entity.id, createdAt: nowISO() }), pattern: pat.value.trim(), ledgerId: st.ledgerId, dir: dir.value, off: off.checked };
         await store.commit([{ store: 'rules', put: rec }]); md.close(); toast('Rule saved');
         if (after) after(rec);
@@ -293,7 +293,7 @@ function legacyReview(raw, source) {
   const entSel = key => select(persons.map(e => ({ value: e.id, label: e.name })), st[key], { onchange: e => { st[key] = e.target.value; Object.assign(mapping, suggestMapping(s, targets())); drawAcc(); } });
   add(body, h('p.small.muted', { style: { marginTop: 0 } }, 'Source: ' + source + ' · ' + s.accounts.length + ' accounts · ' + s.income.length + ' income · ' + s.expenses.length + ' expenses · ' + s.transfers.length + ' transfers · ' + s.loans.length + ' loans · ' + s.investments.length + ' investments'),
     h('div.grid.g2', field('“You” in the old app goes to', entSel('me')), field('“Spouse” in the old app goes to', entSel('spouse'))),
-    h('div.section-h', h('h2', 'Accounts'), h('span.muted.small', 'map each old account to an existing ledger, or create a new one')), accBox,
+    h('div.section-h', h('h2', 'Accounts'), h('span.muted.small', 'match each old account to one here, or create it')), accBox,
     h('div.section-h', h('h2', 'Balance check'), h('button.btn.sm', { onclick: drawChecks }, 'Re-check')), checks);
   function drawAcc() {
     clear(accBox);
@@ -302,11 +302,11 @@ function legacyReview(raw, source) {
       const o = ownerOfAccount(s, a.id);
       const t = targets()[o] || targets().me;
       const c = makeCtx({ ...t, vouchers: [] });
-      const opts = [{ value: '', label: '+ Create new ledger “' + a.name + '”' }, ...ledgerItems(c, l => l.system !== 'capital').map(x => ({ value: x.id, label: x.group + ' › ' + x.label }))];
+      const opts = [{ value: '', label: '+ Create “' + a.name + '”' }, ...ledgerItems(c, l => l.system !== 'capital').map(x => ({ value: x.id, label: x.group + ' › ' + x.label }))];
       add(tb, h('tr', h('td', a.name, h('div.narr', a.type + ' · ' + (o === 'spouse' ? 'Spouse' : 'You'))), h('td.r.amt', money(a.opening || 0)), h('td', select(opts, mapping['acc:' + a.id] || '', { class: 'inp sm', onchange: e => { mapping['acc:' + a.id] = e.target.value; drawChecks(); } }))));
     }
-    add(accBox, h('div.tbl-wrap', h('table.tbl', h('thead', h('tr', h('th', 'Old account'), h('th.r', 'Old opening'), h('th', 'New ledger'))), tb)),
-      h('p.small.muted', 'Income and expense categories are matched by name; anything without a match becomes a new ledger with a sensible tax tag (hospital/clinic → professional receipts, professional → deductible expense). You can rename or merge later.'));
+    add(accBox, h('div.tbl-wrap', h('table.tbl', h('thead', h('tr', h('th', 'Old account'), h('th.r', 'Old starting balance'), h('th', 'Becomes'))), tb)),
+      h('p.small.muted', 'Income and spending categories are matched by name; anything without a match is created, with sensible tax treatment (hospital / clinic → practice income). You can rename them later.'));
     drawChecks();
   }
   let plan = null;
@@ -314,18 +314,18 @@ function legacyReview(raw, source) {
     clear(checks);
     try { plan = buildLegacyPlan(s, targets(), mapping); } catch (e) { add(checks, h('div.note.bad', 'Could not build the import: ' + e.message)); plan = null; return; }
     const ok = plan.checks.every(x => x.actual === x.expected);
-    add(checks, h('div', { class: 'note ' + (ok ? 'ok' : 'bad') }, ok ? '✓ Every old account balance is reproduced exactly in the new books.' : '⚠ Some balances differ — see below.'),
-      h('div.tbl-wrap', { style: { marginTop: '8px' } }, h('table.tbl', h('thead', h('tr', h('th', 'Old account'), h('th', 'New ledger'), h('th.r', 'Old app balance'), h('th.r', 'After import'), h('th'))),
+    add(checks, h('div', { class: 'note ' + (ok ? 'ok' : 'bad') }, ok ? '✓ Every old account balance comes out exactly the same here.' : '⚠ Some balances differ — see below.'),
+      h('div.tbl-wrap', { style: { marginTop: '8px' } }, h('table.tbl', h('thead', h('tr', h('th', 'Old account'), h('th', 'Here'), h('th.r', 'Old app balance'), h('th.r', 'After import'), h('th'))),
         h('tbody', plan.checks.map(x => h('tr', h('td', x.name), h('td', x.ledger.name, x.ledger.legacy ? h('span.pill', { style: { marginLeft: '6px' } }, 'new') : null), h('td.r.amt', money(x.old)), h('td.r.amt', money(x.actual)), h('td', x.actual === x.expected ? h('span.in', '✓') : h('span.out', 'differs'))))))),
-      h('p.small', plan.vouchers.length + ' entries · ' + plan.newLedgers.length + ' new ledgers · ' + plan.holdings.length + ' holdings · ' + plan.taxPnl.length + ' tax P&L · ' + plan.rules.length + ' rules'),
+      h('p.small', plan.vouchers.length + ' entries · ' + plan.newLedgers.length + ' new accounts / categories · ' + plan.holdings.length + ' holdings · ' + plan.taxPnl.length + ' tax P&L · ' + plan.rules.length + ' rules'),
       plan.warnings.map(w => h('div.note.warn', { style: { marginTop: '6px' } }, w)),
       plan.newLedgers.some(l => l.system === 'suspense' && plan.vouchers.some(v => v.lines.some(x => x.ledgerId === l.id))) || plan.vouchers.some(v => v.lines.some(x => (store.ledger(x.ledgerId) || {}).system === 'suspense'))
-        ? h('div.note.warn', { style: { marginTop: '6px' } }, 'Some old entries had no account; they are posted against Suspense so nothing is lost. Reclassify them later.') : null);
+        ? h('div.note.warn', { style: { marginTop: '6px' } }, 'Some old entries had no account; they go to “To sort later” so nothing is lost.') : null);
   }
   drawAcc();
   const md = openModal({
     title: 'Review old DoctorWealth import', size: 'xwide', sticky: true, body,
-    foot: [h('span.left.small.muted', 'Posted as one batch you can undo from Import history.'), h('button.btn', { onclick: () => md.close() }, 'Cancel'), h('button.btn.primary', { onclick: commit }, 'Import')]
+    foot: [h('span.left.small.muted', 'Can be undone in one click from Import history.'), h('button.btn', { onclick: () => md.close() }, 'Cancel'), h('button.btn.primary', { onclick: commit }, 'Import')]
   });
   async function commit() {
     if (!plan) return;
@@ -387,10 +387,10 @@ export async function importHoldings() {
   const st = { ledgerId: (c.ledgers.find(l => l.name === 'Stocks') || {}).id || '' };
   const md = openModal({
     title: 'Review holdings', sub: f.name + ' · ' + res.items.length + ' holdings · cost ' + money(res.cost) + ' · value ' + money(res.value), size: 'wide',
-    body: h('div', field('Compare with ledger', ledgerCombo(c, 'invest', st.ledgerId, id => { st.ledgerId = id; })),
+    body: h('div', field('Compare with', ledgerCombo(c, 'invest', st.ledgerId, id => { st.ledgerId = id; })),
       h('div.tbl-wrap', { style: { maxHeight: '45vh', overflowY: 'auto', marginTop: '10px' } }, h('table.tbl', h('thead', h('tr', h('th', 'Symbol'), h('th.r', 'Qty'), h('th.r', 'Avg'), h('th.r', 'LTP'), h('th.r', 'Cost'), h('th.r', 'Value'))),
         h('tbody', res.items.map(x => h('tr', h('td', x.symbol), h('td.r', String(x.qty)), h('td.r.amt', money(x.avg)), h('td.r.amt', money(x.ltp)), h('td.r.amt', money(x.cost)), h('td.r.amt', money(x.value))))))),
-      h('p.small.muted', 'Saved as a snapshot and compared with the ledger at cost. Lot-wise FIFO, buys/sells and capital gains arrive in Phase 2 (Investments). Books are not changed.')),
+      h('p.small.muted', 'Saved as a snapshot and compared with what you paid. Buying / selling and profit calculation come in the next phase. Nothing else is changed.')),
     foot: [h('button.btn', { onclick: () => md.close() }, 'Cancel'), h('button.btn.primary', { onclick: async () => {
       const old = S.holdings.filter(x => x.entityId === c.entity.id && x.source === 'zerodha');
       const ops = old.map(x => ({ store: 'holdings', del: x.id }));

@@ -1,22 +1,22 @@
 /* In-memory state backed by IndexedDB. All writes go through here so audit, numbering, validation,
    locking and persistence are applied in one place. */
 import * as DB from './db.js';
-import { makeEntity, seedMasters, makeLedger } from '../core/masters.js';
+import { makeEntity, seedMasters, makeLedger, GROUP_TEMPLATE, OLD_GROUP_NAMES, SYSTEM_NAMES, OLD_LEDGER_NAMES } from '../core/masters.js';
 import { makeCtx } from '../core/books.js';
 import { validateVoucher, nextNumber, newVoucher } from '../core/vouchers.js';
 import { buildDemo } from '../core/demo.js';
 import { uid, nowISO, clone } from '../lib/util.js';
 import { today, fyOf } from '../lib/dates.js';
 
-export const APP_VERSION = '1.0.0';
-export const SCHEMA_VERSION = 1;
+export const APP_VERSION = '1.1.0';
+export const SCHEMA_VERSION = 2;
 const COLLS = ['entities', 'groups', 'ledgers', 'vouchers', 'rules', 'recurring', 'shortcuts', 'batches', 'holdings', 'taxpnl'];
 
 export const S = {
   entities: [], groups: [], ledgers: [], vouchers: [], rules: [], recurring: [], shortcuts: [], batches: [], holdings: [], taxpnl: [],
   settings: {}, persistence: null, version: 0
 };
-const DEFAULT_SETTINGS = { activeEntityId: '', theme: 'auto', hideAmounts: false, proMode: false, lastBackupAt: '', fy: fyOf(today()), owners: ['Me', 'Spouse', 'Joint'], defaultMoney: {}, lastSnapshotAt: '' };
+const DEFAULT_SETTINGS = { activeEntityId: '', theme: 'auto', hideAmounts: false, proMode: false, lastBackupAt: '', fy: fyOf(today()), owners: ['Me', 'Spouse', 'Joint'], defaultMoney: {}, lastSnapshotAt: '', caMode: false };
 
 const subs = new Set();
 export function subscribe(fn) { subs.add(fn); return () => subs.delete(fn); }
@@ -24,7 +24,22 @@ function changed() { S.version++; ctxCache.clear(); for (const fn of subs) { try
 
 /* ---------- boot ---------- */
 /* Forward-only data migrations keyed by the version they upgrade FROM. A backup snapshot is taken first. */
-const MIGRATIONS = {};
+const MIGRATIONS = {
+  /* v1 -> v2: plain-language names for built-in sections and accounts the user has not renamed */
+  1: async () => {
+    const ops = [];
+    for (const g of S.groups) {
+      const tpl = GROUP_TEMPLATE.find(x => x.key === g.key);
+      if (tpl && g.name === OLD_GROUP_NAMES[g.key]) { g.name = tpl.name; ops.push({ store: 'groups', put: g }); }
+    }
+    for (const l of S.ledgers) {
+      const sys = SYSTEM_NAMES[l.system];
+      if (sys && sys.old && l.name === sys.old) { l.name = sys.name; ops.push({ store: 'ledgers', put: l }); }
+      else if (OLD_LEDGER_NAMES[l.name]) { l.name = OLD_LEDGER_NAMES[l.name]; ops.push({ store: 'ledgers', put: l }); }
+    }
+    await DB.write(ops);
+  }
+};
 
 export async function init() {
   const [meta, ...lists] = await Promise.all([DB.getAll('meta'), ...COLLS.map(c => DB.getAll(c))]);
@@ -147,11 +162,52 @@ export async function saveVouchers(list, extraOps = []) {
   }
   await commit([...ops, ...extraOps]);
 }
+/* deleting one half of a family transfer deletes both halves */
 export async function deleteVoucher(id) {
   const v = voucher(id); if (!v) return;
-  const lock = (entityById(v.entityId) || {}).lockedUpto;
-  if (lock && v.date <= lock) throw new Error(`Books are locked up to ${lock}.`);
-  await commit([{ store: 'vouchers', del: id }, auditOp(v.entityId, 'delete', 'voucher', id, describe(v), v, null)]);
+  const all = v.pairId ? S.vouchers.filter(x => x.pairId === v.pairId) : [v];
+  for (const x of all) {
+    const lock = (entityById(x.entityId) || {}).lockedUpto;
+    if (lock && x.date <= lock) throw new Error(`${entityById(x.entityId).name}'s year is closed up to ${lock}.`);
+  }
+  await commit(all.flatMap(x => [{ store: 'vouchers', del: x.id }, auditOp(x.entityId, 'delete', 'voucher', x.id, describe(x), x, null)]));
+}
+
+/* ---------- money between family members ----------
+   kind 'gift': not to be returned — giver: gifts given (net worth) / receiver: gifts received (net worth); never income or expense.
+   kind 'loan': to be returned — both sides use a "Money with <other person>" account, which cancels out in the family view. */
+export async function ensureSystemLedger(entityId, system) {
+  const found = S.ledgers.find(l => l.entityId === entityId && l.system === system);
+  if (found) return found;
+  const g = S.groups.find(x => x.entityId === entityId && x.key === 'capital') || S.groups.find(x => x.entityId === entityId && x.root === 'capital');
+  const l = makeLedger({ entityId, groupId: g.id, name: SYSTEM_NAMES[system].name, system, taxTag: 'none' });
+  await saveLedger(l);
+  return l;
+}
+export async function saveFamilyTransfer({ fromEntityId, toEntityId, fromMoneyId, toMoneyId, amount, date, note, kind, replacePairId }) {
+  if (fromEntityId === toEntityId) throw new Error('Choose two different people.');
+  if (!(amount > 0)) throw new Error('Enter the amount.');
+  let outL, inL;
+  if (kind === 'gift') { outL = await ensureSystemLedger(fromEntityId, 'gift_out'); inL = await ensureSystemLedger(toEntityId, 'gift_in'); }
+  else { outL = await addInterEntityLedger(fromEntityId, toEntityId); inL = await addInterEntityLedger(toEntityId, fromEntityId); }
+  const pairId = uid('pair');
+  const giver = entityById(fromEntityId).name, taker = entityById(toEntityId).name;
+  const meta = { family: { kind, fromEntityId, toEntityId } };
+  const a = newVoucher(fromEntityId, { type: 'payment', src: 'family', date, narration: note || `${kind === 'gift' ? 'Gift' : 'Given'} to ${taker}`, lines: [{ ledgerId: outL.id, dr: amount, cr: 0 }, { ledgerId: fromMoneyId, dr: 0, cr: amount }], meta });
+  const b = newVoucher(toEntityId, { type: 'receipt', src: 'family', date, narration: note || `${kind === 'gift' ? 'Gift' : 'Received'} from ${giver}`, lines: [{ ledgerId: toMoneyId, dr: amount, cr: 0 }, { ledgerId: inL.id, dr: 0, cr: amount }], meta });
+  a.pairId = b.pairId = pairId;
+  const old = replacePairId ? S.vouchers.filter(v => v.pairId === replacePairId) : [];
+  for (const v of [a, b, ...old]) {
+    const errs = validateVoucher(ctxOf(v.entityId), v, { isNew: !old.includes(v), previous: old.includes(v) ? v : null });
+    if (errs.length) throw new Error(errs.join(' '));
+  }
+  const pool = S.vouchers.filter(v => !old.includes(v));
+  for (const v of [a, b]) { v.no = nextNumber(pool, v.entityId, v.type, v.date); pool.push(v); }
+  await commit([...old.map(v => ({ store: 'vouchers', del: v.id })),
+    { store: 'vouchers', put: a }, { store: 'vouchers', put: b },
+    auditOp(fromEntityId, old.length ? 'update' : 'create', 'voucher', a.id, describe(a), old.find(v => v.entityId === fromEntityId) || null, a),
+    auditOp(toEntityId, old.length ? 'update' : 'create', 'voucher', b.id, describe(b), old.find(v => v.entityId === toEntityId) || null, b)]);
+  return { a, b };
 }
 export function describe(v) {
   const tot = v.lines.reduce((t, l) => t + (l.dr || 0), 0);
@@ -214,7 +270,7 @@ export async function addInterEntityLedger(entityId, otherId) {
   const existing = S.ledgers.find(l => l.entityId === entityId && l.interEntityWith === otherId);
   if (existing) return existing;
   const g = S.groups.find(x => x.entityId === entityId && x.key === 'advances') || S.groups.find(x => x.entityId === entityId && x.root === 'asset');
-  const l = makeLedger({ entityId, groupId: g.id, name: 'Current A/c – ' + entityById(otherId).name, interEntityWith: otherId });
+  const l = makeLedger({ entityId, groupId: g.id, name: 'Money with ' + entityById(otherId).name, interEntityWith: otherId, note: 'Money given or taken that is to be returned. A positive balance means they owe you.' });
   await saveLedger(l);
   return l;
 }

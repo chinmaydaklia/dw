@@ -1,7 +1,38 @@
 # DoctorWealth Books — Phase 1
 
-Offline, Tally-like double-entry accounts for a doctor's family, rebuilt from the DoctorWealth blueprint.
+Money records for a doctor's family, rebuilt from the DoctorWealth blueprint. It is offline and written in **plain language**: accounts,
+categories, money in / money out, what I own & owe. Correct double entry runs underneath, and a separate **For my CA**
+section shows the formal accounting view and builds a one-click Excel pack for the accountant.
 Plain JavaScript (ES modules, no framework, no build step). Data lives in this browser's IndexedDB.
+
+## Plain language vs the CA view
+
+| You see | Your CA sees (For my CA, or Settings → "Accountant words everywhere") |
+|---|---|
+| Account / category | Ledger |
+| Section | Group |
+| Entry · Money in / Money out / Transfer / Adjustment | Voucher · Receipt / Payment / Contra / Journal |
+| From → To | Credit → Debit |
+| Income & spending · Saved this year | Profit & loss · Surplus |
+| What I own & owe · My net worth | Balance sheet · Capital account |
+| To sort later · Bills to pay · Starting net worth | Suspense · Sundry payables · Capital (opening) |
+
+**For my CA** has the trial balance, P&L, balance sheet, day book with Dr/Cr, ledgers & groups, and a **CA pack**. The pack is one Excel file with:
+- trial balance, P&L and balance sheet
+- day book and ledger-wise entries
+- TDS for matching with 26AS
+- cash vs digital receipts
+- family transfers
+- chart of accounts with section numbers
+
+## Money with family
+
+The **Money with family** screen records cash or bank money between You and Spouse (either direction) in both people's records at once.
+
+- **Gift — not to be returned:** not income or spending for either person. In accounting terms it is drawings for the giver and capital introduced for the receiver.
+- **To be returned:** a running "who owes whom" total, which cancels out in the Family view.
+
+Editing or deleting a transfer changes both sides.
 
 **Phase 1 scope:** entities, masters, entry and core reports, plus the file imports from the old app.
 
@@ -21,7 +52,7 @@ browser storage, so the old data can be read and migrated in one click.
 
 | Area | Delivered |
 |---|---|
-| Entities | You, Spouse and a deletable Demo entity with a sample year. Add more (HUF, parents…) and switch with F3, like Tally companies. Every record points to a permanent id, so renaming never breaks history. Each entity has its own accent colour. A family view sits on top. |
+| People | You, Spouse and a deletable Demo entity with a sample year. Add more (HUF, parents…) and switch with F3, like Tally companies. Every record points to a permanent id, so renaming never breaks history. Each entity has its own accent colour. A family view sits on top. |
 | Accounting model | Balanced double entry. Amounts are integer paise. Opening capital is the balancing figure, so books always open balanced. Every create/edit/delete goes into an audit trail (with restore). Finished financial years can be locked. |
 | Masters | Five root types (asset, liability, capital, income, expense). Tally-style groups, with editable starter ledgers for You (PNH, DKM, Clinic, Arihant loan, TDS receivable…) and Spouse. Every ledger has a tax tag with stable keys, and section numbers sit in a lookup table by tax year (44ADA → 58 for 2026-27). Sites (PNH/DKM/Clinic), owner tags and free custom tags are supported. Masters can be copied between entities. |
 | Entry | Quick one-line entry (`450 petrol sbi`, `+18k pnh`, `5000 sbi to cash`, `y 1200 groceries card`). Simple screens for Income (with TDS and a cash/digital split), Expense (split across ledgers), Transfer, Investment, Loan (EMI principal/interest, loans given and recovered) and the clinic/hospital daily summary (cash, UPI/card and patient count; no patient names). There is also a multi-day daily grid. Recurring entries are never posted silently, and any entry can be saved as a shortcut. Pro-mode journal with raw Dr/Cr. |

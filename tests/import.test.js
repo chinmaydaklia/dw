@@ -74,14 +74,14 @@ test('plan rows: rules, exact duplicates on re-import, posting', () => {
   assert.equal(suggestKeyword('UPI/DR/412345678901/SWIGGY/YESB'), 'swiggy');
   const parsed = parseTableStatement(parseCSV(CSV));
   let ctx = makeCtx({ entity, groups, ledgers, vouchers });
-  const rows = planRows(ctx, L('SBI Savings'), parsed, rules, L('Suspense'));
+  const rows = planRows(ctx, L('SBI Savings'), parsed, rules, L('To sort later'));
   assert.equal(rows[0].counterId, L('Dining & Entertainment'));
   assert.equal(rows[1].counterId, L('Professional Fees – PNH'));
-  assert.equal(rows[2].counterId, L('Suspense'));
+  assert.equal(rows[2].counterId, L('To sort later'));
   for (const r of rows) { const v = rowToVoucher(ctx, L('SBI Savings'), r, 'b1', 'sbi'); assert.deepEqual(validateVoucher(ctx, v), []); vouchers.push(v); }
   ctx = makeCtx({ entity, groups, ledgers, vouchers });
   assert.equal(balances(ctx).get(L('SBI Savings')).closing, 1800000 - 45000 - 500000);
-  const again = planRows(ctx, L('SBI Savings'), parseTableStatement(parseCSV(CSV)), rules, L('Suspense'));
+  const again = planRows(ctx, L('SBI Savings'), parseTableStatement(parseCSV(CSV)), rules, L('To sort later'));
   assert.ok(again.every(r => r.dup && !r.include), 're-import is flagged as duplicate');
 });
 

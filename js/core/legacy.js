@@ -142,7 +142,7 @@ export function buildLegacyPlan(src, targets, mapping = {}) {
   const addOpening = (ledgerId, amt) => { if (amt) plan.openingDeltas.set(ledgerId, (plan.openingDeltas.get(ledgerId) || 0) + amt); };
   const inter = (o, other) => {
     const t = ent(o), ot = ent(other);
-    return t.ledgers.find(l => l.interEntityWith === ot.entity.id) || addLedger(o, 'advances', 'Current A/c – ' + ot.entity.name, { interEntityWith: ot.entity.id, note: 'Money held for / owed by ' + ot.entity.name + '. Balances cancel out in the family view.' });
+    return t.ledgers.find(l => l.interEntityWith === ot.entity.id) || addLedger(o, 'advances', 'Money with ' + ot.entity.name, { interEntityWith: ot.entity.id, note: 'Money given or taken that is to be returned. A positive balance means they owe you.' });
   };
   const dateOf = (...c) => c.find(isDate) || today();
   const push = (o, p) => {

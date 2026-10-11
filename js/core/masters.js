@@ -14,23 +14,34 @@ export const ROOT_ORDER = ['asset', 'liability', 'capital', 'income', 'expense']
 
 /* nature drives behaviour: cash/bank are "money" ledgers (contra, cash flow, cash-vs-digital); card is a
    money-like liability used for payments. */
+/* name = plain wording shown by default; caName = formal accounting name shown in the CA view */
 export const GROUP_TEMPLATE = [
-  { key: 'bank', name: 'Bank Accounts', root: 'asset', nature: 'bank' },
-  { key: 'cash', name: 'Cash-in-Hand', root: 'asset', nature: 'cash' },
-  { key: 'invest', name: 'Investments', root: 'asset', nature: 'investment' },
-  { key: 'advances', name: 'Loans & Advances (Asset)', root: 'asset', nature: 'advance' },
-  { key: 'taxassets', name: 'Taxes Paid & TDS', root: 'asset', nature: 'taxasset' },
-  { key: 'fixed', name: 'Fixed Assets', root: 'asset', nature: 'fixed' },
-  { key: 'loans', name: 'Loans (Liability)', root: 'liability', nature: 'loan' },
-  { key: 'cards', name: 'Credit Cards', root: 'liability', nature: 'card' },
-  { key: 'curliab', name: 'Current Liabilities', root: 'liability', nature: 'payable' },
-  { key: 'capital', name: 'Capital Account', root: 'capital', nature: 'capital' },
-  { key: 'profinc', name: 'Professional Receipts', root: 'income', nature: 'profincome' },
-  { key: 'othinc', name: 'Other Income', root: 'income', nature: 'otherincome' },
-  { key: 'profexp', name: 'Professional Expenses', root: 'expense', nature: 'profexpense' },
-  { key: 'finexp', name: 'Finance Costs', root: 'expense', nature: 'finance' },
-  { key: 'personal', name: 'Personal & Household', root: 'expense', nature: 'personal' }
+  { key: 'bank', name: 'Bank accounts', caName: 'Bank Accounts', root: 'asset', nature: 'bank' },
+  { key: 'cash', name: 'Cash', caName: 'Cash-in-Hand', root: 'asset', nature: 'cash' },
+  { key: 'invest', name: 'Investments', caName: 'Investments', root: 'asset', nature: 'investment' },
+  { key: 'advances', name: 'Money lent to others', caName: 'Loans & Advances (Asset)', root: 'asset', nature: 'advance' },
+  { key: 'taxassets', name: 'Tax paid & TDS', caName: 'Taxes Paid & TDS', root: 'asset', nature: 'taxasset' },
+  { key: 'fixed', name: 'Car, equipment & property', caName: 'Fixed Assets', root: 'asset', nature: 'fixed' },
+  { key: 'loans', name: 'Loans I have taken', caName: 'Loans (Liability)', root: 'liability', nature: 'loan' },
+  { key: 'cards', name: 'Credit cards', caName: 'Credit Cards', root: 'liability', nature: 'card' },
+  { key: 'curliab', name: 'Bills to pay & unsorted', caName: 'Current Liabilities', root: 'liability', nature: 'payable' },
+  { key: 'capital', name: 'Net worth & family gifts', caName: 'Capital Account', root: 'capital', nature: 'capital' },
+  { key: 'profinc', name: 'Practice income', caName: 'Professional Receipts', root: 'income', nature: 'profincome' },
+  { key: 'othinc', name: 'Other income', caName: 'Other Income', root: 'income', nature: 'otherincome' },
+  { key: 'profexp', name: 'Practice expenses', caName: 'Professional Expenses', root: 'expense', nature: 'profexpense' },
+  { key: 'finexp', name: 'Loan interest & bank charges', caName: 'Finance Costs', root: 'expense', nature: 'finance' },
+  { key: 'personal', name: 'Personal & home', caName: 'Personal & Household', root: 'expense', nature: 'personal' }
 ];
+/* old (v1) names, used once to rename built-in groups the user has not renamed */
+export const OLD_GROUP_NAMES = { bank: 'Bank Accounts', cash: 'Cash-in-Hand', advances: 'Loans & Advances (Asset)', taxassets: 'Taxes Paid & TDS', fixed: 'Fixed Assets', loans: 'Loans (Liability)', cards: 'Credit Cards', curliab: 'Current Liabilities', capital: 'Capital Account', profinc: 'Professional Receipts', othinc: 'Other Income', profexp: 'Professional Expenses', finexp: 'Finance Costs', personal: 'Personal & Household' };
+/* built-in accounts with a plain name and a formal one */
+export const SYSTEM_NAMES = {
+  capital: { name: 'Starting net worth', caName: 'Capital Account', old: 'Capital Account' },
+  suspense: { name: 'To sort later', caName: 'Suspense', old: 'Suspense' },
+  gift_out: { name: 'Gifts given to family', caName: 'Drawings – gifts to relatives' },
+  gift_in: { name: 'Gifts received from family', caName: 'Capital introduced – gifts from relatives' }
+};
+export const OLD_LEDGER_NAMES = { 'Sundry Payables': 'Bills to pay' };
 export const MONEY_NATURES = new Set(['bank', 'cash']);
 export const PAYMENT_NATURES = new Set(['bank', 'cash', 'card']);
 
@@ -90,9 +101,9 @@ const SELF = [
   ['loans', 'Home Loan', {}],
   ['loans', 'Car Loan', {}],
   ['cards', 'Credit Card', { alias: 'cc card' }],
-  ['curliab', 'Sundry Payables', {}],
-  ['curliab', 'Suspense', { system: 'suspense', note: 'Unclassified imported rows land here until you reclassify them.' }],
-  ['capital', 'Capital Account', { system: 'capital' }],
+  ['curliab', 'Bills to pay', {}],
+  ['curliab', 'To sort later', { system: 'suspense', note: 'Imported entries you have not sorted into a category yet. Open it and pick the right category.' }],
+  ['capital', 'Starting net worth', { system: 'capital', note: 'Worked out automatically: what you owned minus what you owed on the start date.' }],
   ['profinc', 'Professional Fees – PNH', { taxTag: 'prof_receipts', site: 'PNH', tdsBps: 1000, alias: 'pnh' }],
   ['profinc', 'Professional Fees – DKM', { taxTag: 'prof_receipts', site: 'DKM', tdsBps: 1000, alias: 'dkm' }],
   ['profinc', 'Clinic Receipts', { taxTag: 'prof_receipts', site: 'Clinic', alias: 'clinic opd' }],
@@ -147,8 +158,8 @@ const SPOUSE = [
   ['taxassets', 'TDS Receivable', { taxTag: 'tds_receivable', system: 'tds', alias: 'tds' }],
   ['taxassets', 'Advance Tax Paid', { taxTag: 'advance_tax' }],
   ['cards', 'Credit Card', { alias: 'cc card' }],
-  ['curliab', 'Suspense', { system: 'suspense' }],
-  ['capital', 'Capital Account', { system: 'capital' }],
+  ['curliab', 'To sort later', { system: 'suspense' }],
+  ['capital', 'Starting net worth', { system: 'capital', note: 'Worked out automatically: what you owned minus what you owed on the start date.' }],
   ['profinc', 'Professional Receipts', { taxTag: 'prof_receipts' }],
   ['othinc', 'Salary', { taxTag: 'salary' }],
   ['othinc', 'Interest – Savings Bank', { taxTag: 'interest', alias: 'sb interest' }],
