@@ -14,6 +14,7 @@ import { LEGACY_KEY, looksLegacy, buildLegacyPlan, suggestMapping, normalizeLega
 import { fmtDate, today, fyOf, fyList } from '../lib/dates.js';
 import { uid, nowISO, normNarr } from '../lib/util.js';
 import { toPaise } from '../lib/money.js';
+import { valueAsset } from '../core/invest.js';
 
 export function renderImport(root) {
   const e = store.activeEntity();
@@ -23,7 +24,7 @@ export function renderImport(root) {
       tile('🏦', 'Bank statement', 'PDF (password OK), CSV, XLS, XLSX · SBI, BoB, HDFC, IDFC tuned + generic columns', () => importStatement()),
       tile('⇪', 'Old DoctorWealth data', 'Bring across accounts, income, expenses, loans and investments — every balance is checked', () => importLegacy()),
       tile('📈', 'Zerodha tax P&L', 'taxpnl-….xlsx — realised gains, F&O and dividends per financial year', () => importTaxPnl()),
-      tile('📊', 'Zerodha holdings', 'Kite holdings Excel — snapshot compared with your books', () => importHoldings()),
+      tile('📊', 'Zerodha holdings', 'Kite holdings Excel — adds shares to Portfolio and updates prices', () => importHoldings()),
       tile('↺', 'Restore backup', 'A backup file from this app (replaces everything)', () => restoreBackup())));
   add(root, h('div.section-h', h('h2', 'Rules'), h('span.muted.small', 'a word in the bank description → category (you still check every row)'), h('span.spacer'), h('button.btn.sm', { onclick: () => editRule(null) }, '+ Rule')));
   const rules = S.rules.filter(r => r.entityId === e.id);
@@ -383,20 +384,45 @@ export async function importHoldings() {
     res = parseHoldings(rows);
   } catch (e) { return toast('Could not read the file: ' + e.message); }
   if (res.error) return openModal({ title: 'Not imported', body: h('div.note.warn', res.error) });
+  const e = store.activeEntity();
   const c = store.ctx();
-  const st = { ledgerId: (c.ledgers.find(l => l.name === 'Stocks') || {}).id || '' };
+  const assets = store.assetsOf(e.id);
+  const match = x => assets.find(a => (x.isin && a.isin === x.isin) || (a.symbol && a.symbol === x.symbol.toUpperCase()));
+  const plan = res.items.map(x => {
+    const a = match(x);
+    const held = a ? valueAsset(a, c.vouchers).qty : 0;
+    return { x, a, held, action: !a ? 'create' : held ? 'price' : 'lots' };
+  });
+  const toAdd = plan.filter(p => p.action !== 'price').length;
+  const since = dateInput('');
   const md = openModal({
     title: 'Review holdings', sub: f.name + ' · ' + res.items.length + ' holdings · cost ' + money(res.cost) + ' · value ' + money(res.value), size: 'wide',
-    body: h('div', field('Compare with', ledgerCombo(c, 'invest', st.ledgerId, id => { st.ledgerId = id; })),
-      h('div.tbl-wrap', { style: { maxHeight: '45vh', overflowY: 'auto', marginTop: '10px' } }, h('table.tbl', h('thead', h('tr', h('th', 'Symbol'), h('th.r', 'Qty'), h('th.r', 'Avg'), h('th.r', 'LTP'), h('th.r', 'Cost'), h('th.r', 'Value'))),
-        h('tbody', res.items.map(x => h('tr', h('td', x.symbol), h('td.r', String(x.qty)), h('td.r.amt', money(x.avg)), h('td.r.amt', money(x.ltp)), h('td.r.amt', money(x.cost)), h('td.r.amt', money(x.value))))))),
-      h('p.small.muted', 'Saved as a snapshot and compared with what you paid. Buying / selling and profit calculation come in the next phase. Nothing else is changed.')),
+    body: h('div',
+      h('div.tbl-wrap', { style: { maxHeight: '45vh', overflowY: 'auto' } }, h('table.tbl', h('thead', h('tr', h('th', 'Symbol'), h('th.r', 'Qty'), h('th.r', 'Avg'), h('th.r', 'Price'), h('th.r', 'Cost'), h('th', 'In Portfolio'))),
+        h('tbody', plan.map(p => h('tr', h('td', p.x.symbol, p.x.isin ? h('div.narr', p.x.isin) : null), h('td.r', String(p.x.qty)), h('td.r.amt', money(p.x.avg)), h('td.r.amt', money(p.x.ltp)), h('td.r.amt', money(p.x.cost)),
+          h('td', p.action === 'price' ? h('span.pill.ok', 'price updated' + (Math.abs(p.held - p.x.qty) > 1e-9 ? ' · you hold ' + p.held + ' here' : '')) : p.action === 'create' ? h('span.pill.gold', 'will be added') : h('span.pill.gold', 'holding will be added'))))))),
+      toAdd ? h('div.grid.g2', { style: { marginTop: '10px' } }, field('Bought on (approximate) for the ones being added', since, 'The date decides short or long term. You can correct each one later in Portfolio.')) : null,
+      h('p.small.muted', 'Shares you already track only get today’s price. New ones are added as “already owned” at Zerodha’s average cost — part of the Stocks account’s starting balance, no money moves.')),
     foot: [h('button.btn', { onclick: () => md.close() }, 'Cancel'), h('button.btn.primary', { onclick: async () => {
-      const old = S.holdings.filter(x => x.entityId === c.entity.id && x.source === 'zerodha');
-      const ops = old.map(x => ({ store: 'holdings', del: x.id }));
-      for (const x of res.items) ops.push({ store: 'holdings', put: { id: uid('hld'), entityId: c.entity.id, ledgerId: st.ledgerId, name: x.symbol, isin: x.isin, type: 'Stocks', qty: x.qty, avg: x.avg, ltp: x.ltp, cost: x.cost, value: x.value, broker: 'Zerodha', source: 'zerodha', asOf: today(), createdAt: nowISO() } });
-      await store.commit(ops); md.close(); toast('Holdings snapshot saved');
-    } }, 'Save snapshot')]
+      if (toAdd && !since.value) return toast('Enter the approximate purchase date');
+      const ops = [];
+      const stocks = await store.ensureLedgerNamed(e.id, 'invest', 'Stocks');
+      for (const p of plan) {
+        const etf = /BEES$|ETF$/i.test(p.x.symbol);
+        if (p.action === 'create') {
+          ops.push({ store: 'assets', put: { id: uid('ast'), entityId: e.id, name: p.x.symbol, type: etf ? 'etf' : 'equity', symbol: p.x.symbol.toUpperCase(), isin: p.x.isin || '', ledgerId: stocks.id, price: p.x.ltp, priceDate: today(), priceSource: 'zerodha',
+            openingLots: [{ id: uid('lot'), date: since.value, qty: p.x.qty, cost: p.x.cost, fmv2018: 0 }], events: [], archived: false, createdAt: nowISO(), updatedAt: nowISO() } });
+        } else if (p.action === 'lots') {
+          ops.push({ store: 'assets', put: { ...p.a, price: p.x.ltp || p.a.price, priceDate: today(), openingLots: [...(p.a.openingLots || []), { id: uid('lot'), date: since.value, qty: p.x.qty, cost: p.x.cost, fmv2018: 0 }], updatedAt: nowISO() } });
+        } else if (p.x.ltp) ops.push({ store: 'assets', put: { ...p.a, price: p.x.ltp, priceDate: today(), priceSource: 'zerodha', updatedAt: nowISO() } });
+      }
+      const old = S.holdings.filter(x => x.entityId === e.id && x.source === 'zerodha');
+      ops.push(...old.map(x => ({ store: 'holdings', del: x.id })));
+      for (const x of res.items) ops.push({ store: 'holdings', put: { id: uid('hld'), entityId: e.id, ledgerId: stocks.id, name: x.symbol, isin: x.isin, type: 'Stocks', qty: x.qty, avg: x.avg, ltp: x.ltp, cost: x.cost, value: x.value, broker: 'Zerodha', source: 'zerodha', asOf: today(), createdAt: nowISO() } });
+      await store.commit(ops); md.close();
+      toast(toAdd ? toAdd + ' added to Portfolio, prices updated' : 'Prices updated');
+      location.hash = '#/portfolio';
+    } }, toAdd ? 'Add to Portfolio' : 'Update prices')]
   });
 }
 

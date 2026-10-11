@@ -1,6 +1,6 @@
 /* Wording. Plain language by default; the "For my CA" pages switch to formal accounting terms. */
 import { S } from '../app/store.js';
-import { GROUP_TEMPLATE, SYSTEM_NAMES } from '../core/masters.js';
+import { GROUP_TEMPLATE, SYSTEM_NAMES, GAIN_LEDGERS } from '../core/masters.js';
 
 let forced = false;
 /* the CA pages call this while they render */
@@ -16,7 +16,7 @@ export function groupName(g) {
 }
 export function ledgerName(l) {
   if (!l) return '?';
-  const sys = SYSTEM_NAMES[l.system];
+  const sys = SYSTEM_NAMES[l.system] || GAIN_LEDGERS[l.system];
   return isCA() && sys && l.name === sys.name ? sys.caName : l.name;
 }
 /* Plain entry kinds instead of Receipt / Payment / Contra / Journal */

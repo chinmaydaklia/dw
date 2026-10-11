@@ -14,6 +14,7 @@ import { renderLedgers, renderLedger } from '../views/masters.js';
 import { renderReport, renderCaPack } from '../views/reports.js';
 import { renderFamilyMoney } from '../views/family.js';
 import { caView } from '../ui/terms.js';
+import { renderPortfolio, renderAsset, renderGains, renderTrading, renderPrices } from '../views/invest.js';
 import { renderImport } from '../views/importer.js';
 import { renderSettings, renderRecurring, renderHealth, renderAudit } from '../views/settings.js';
 
@@ -21,6 +22,7 @@ const NAV = [
   ['Overview', [['dashboard', '◧', 'Home', 'G D'], ['family', '⌂', 'Family', 'G F']]],
   ['Add & view', [['quick', '+', 'Add entry', 'N'], ['daybook', '☰', 'All entries', 'G B'], ['spouse', '⇄', 'Money with family', ''], ['daily', '✚', 'Clinic & hospital daily', ''], ['recurring', '↻', 'Repeating entries', '']]],
   ['My money', [['ledgers', '▤', 'Accounts & categories', 'G L']]],
+  ['Investments', [['portfolio', '◆', 'Portfolio', 'G V'], ['gains', '△', 'Capital gains', 'G G'], ['trading', '⇵', 'F&O / intraday', ''], ['prices', '₹', 'Update prices', '']]],
   ['Reports', [['pl', '↕', 'Income & spending', 'G P'], ['bs', '▦', 'What I own & owe', 'G S'], ['networth', '↗', 'Net worth', ''], ['analysis', '◔', 'Breakdown', 'G A'], ['cf', '⇆', 'Money in & out', 'G C'], ['cash', '₹', 'Cash vs digital', '']]],
   ['Data', [['import', '⇩', 'Import files', 'G I'], ['settings', '⚙', 'Settings & backup', ''], ['health', '✓', 'Checks', '']]],
   ['For my CA', [['ca-pack', '⇩', 'Download CA pack', ''], ['tb', '⚖', 'Trial balance', 'G T'], ['ca-pl', '↕', 'Profit & loss account', ''], ['ca-bs', '▦', 'Balance sheet', ''], ['ca-daybook', '☰', 'Day book (Dr / Cr)', ''], ['ca-ledgers', '▤', 'Ledgers & groups', '']]]
@@ -108,6 +110,11 @@ function render(dataChanged = false) {
     else if (name === 'ledgers') renderLedgers(content);
     else if (name === 'ledger') { const l = store.ledger(route.args[0]); title = l ? l.name : 'Account'; renderLedger(content, route.args[0]); }
     else if (name === 'pack') renderCaPack(content);
+    else if (name === 'portfolio') renderPortfolio(content);
+    else if (name === 'asset') { const a = store.asset(route.args[0]); title = a ? a.name : 'Investment'; renderAsset(content, route.args[0]); }
+    else if (name === 'gains') renderGains(content);
+    else if (name === 'trading') renderTrading(content);
+    else if (name === 'prices') renderPrices(content);
     else if (REPORTS.has(name)) renderReport(content, name, route.args);
     else if (name === 'import') renderImport(content);
     else if (name === 'settings') renderSettings(content);
@@ -212,7 +219,7 @@ function onKey(e) {
   const k = e.key.toLowerCase();
   if (gPending && Date.now() - gPending < 1200) {
     gPending = 0;
-    const map = { d: 'dashboard', b: 'daybook', l: 'ledgers', t: 'tb', p: 'pl', s: 'bs', c: 'cf', a: 'analysis', i: 'import', f: 'family', h: 'health' };
+    const map = { d: 'dashboard', b: 'daybook', l: 'ledgers', t: 'tb', p: 'pl', s: 'bs', c: 'cf', a: 'analysis', i: 'import', f: 'family', h: 'health', v: 'portfolio', g: 'gains' };
     if (map[k]) { e.preventDefault(); go(map[k]); }
     return;
   }
@@ -224,7 +231,7 @@ function onKey(e) {
 export function shortcutsHelp() {
   const rows = [['N', 'Add entry'], ['F6', 'Money received'], ['F5', 'Money spent'], ['F4', 'Move money between my accounts'], ['F3', 'Switch person'],
     ['Ctrl+K or /', 'Search'], ['Alt+H', 'Hide / show amounts'], ['Ctrl+Enter', 'Save the open form'], ['Esc', 'Close'],
-    ['G then D / B / L', 'Home / All entries / Accounts'], ['G then P / S / C', 'Income & spending / What I own & owe / Money in & out'], ['G then A / I / F', 'Breakdown / Import / Family'], ['?', 'This help']];
+    ['G then D / B / L', 'Home / All entries / Accounts'], ['G then P / S / C', 'Income & spending / What I own & owe / Money in & out'], ['G then A / I / F', 'Breakdown / Import / Family'], ['G then V / G', 'Portfolio / Capital gains'], ['?', 'This help']];
   openModal({ title: 'Keyboard shortcuts', body: h('table.tbl', h('tbody', rows.map(r => h('tr', h('td', h('b', r[0])), h('td', r[1]))))) });
 }
 function welcome() {

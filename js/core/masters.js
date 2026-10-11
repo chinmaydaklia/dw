@@ -41,6 +41,18 @@ export const SYSTEM_NAMES = {
   gift_out: { name: 'Gifts given to family', caName: 'Drawings – gifts to relatives' },
   gift_in: { name: 'Gifts received from family', caName: 'Capital introduced – gifts from relatives' }
 };
+/* investment profit accounts, created when first needed */
+export const GAIN_LEDGERS = {
+  gain_eq_st: { name: 'Profit on shares & equity funds – short term', caName: 'STCG – listed equity', tag: 'stcg_equity' },
+  gain_eq_lt: { name: 'Profit on shares & equity funds – long term', caName: 'LTCG – listed equity', tag: 'ltcg_equity' },
+  gain_oth_st: { name: 'Profit on other investments – short term', caName: 'STCG – other assets', tag: 'stcg_other' },
+  gain_oth_lt: { name: 'Profit on other investments – long term', caName: 'LTCG – other assets', tag: 'ltcg_other' },
+  gain_vda: { name: 'Profit on crypto', caName: 'Income from VDA', tag: 'vda_gain' },
+  trade_fo: { name: 'F&O trading profit / loss', caName: 'Business income – F&O (non-speculative)', tag: 'business_fo' },
+  trade_intraday: { name: 'Intraday trading profit / loss', caName: 'Speculative business income – intraday', tag: 'speculative' },
+  trade_charges: { name: 'Trading charges (brokerage, STT)', caName: 'Trading expenses', tag: 'trading_expense', expense: true },
+  inv_income: { name: 'Interest – PPF / NPS / other investments', caName: 'Interest on investments', tag: 'interest' }
+};
 export const OLD_LEDGER_NAMES = { 'Sundry Payables': 'Bills to pay' };
 export const MONEY_NATURES = new Set(['bank', 'cash']);
 export const PAYMENT_NATURES = new Set(['bank', 'cash', 'card']);
@@ -55,7 +67,15 @@ export const TAX_TAGS = {
   rent: { label: 'House property – rent', roots: ['income'] },
   other_income: { label: 'Other income', roots: ['income'] },
   exempt: { label: 'Exempt income', roots: ['income'] },
-  capital_gain: { label: 'Capital gains', roots: ['income'] },
+  capital_gain: { label: 'Capital gains (unclassified)', roots: ['income'] },
+  stcg_equity: { label: 'Short-term gain – listed shares / equity funds', roots: ['income'] },
+  ltcg_equity: { label: 'Long-term gain – listed shares / equity funds', roots: ['income'] },
+  stcg_other: { label: 'Short-term gain – other investments (slab rate)', roots: ['income'] },
+  ltcg_other: { label: 'Long-term gain – other investments', roots: ['income'] },
+  vda_gain: { label: 'Crypto (virtual digital asset) gain', roots: ['income'] },
+  business_fo: { label: 'F&O trading – business income', roots: ['income'] },
+  speculative: { label: 'Intraday trading – speculative business', roots: ['income'] },
+  trading_expense: { label: 'Trading charges (business expense)', roots: ['expense'] },
   prof_expense: { label: 'Professional expense (deductible)', roots: ['expense'] },
   depreciation: { label: 'Depreciation', roots: ['expense'] },
   personal: { label: 'Personal (not deductible)', roots: ['expense'] },
@@ -68,7 +88,7 @@ export const TAX_TAGS = {
   none: { label: 'No tax effect', roots: ['asset', 'liability', 'capital', 'income', 'expense'] }
 };
 export const SECTION_REFS = {
-  '2025-26': { prof_receipts: '44ADA', books: '44AA', audit: '44AB', ded_80c: '80C', ded_80d: '80D', ded_80g: '80G', rebate: '87A', tds_prof: '194J', home_loan_interest: '24(b)' },
+  '2025-26': { prof_receipts: '44ADA', books: '44AA', audit: '44AB', ded_80c: '80C', ded_80d: '80D', ded_80g: '80G', rebate: '87A', tds_prof: '194J', home_loan_interest: '24(b)', stcg_equity: '111A', ltcg_equity: '112A', ltcg_other: '112', vda_gain: '115BBH', speculative: '43(5)' },
   '2026-27': { prof_receipts: '58', books: '62', audit: '63', ded_80c: '123', ded_80d: '126', rebate: '156', tds_prof: '393' }
 };
 export function sectionFor(tag, taxYear) {

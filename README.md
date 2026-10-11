@@ -1,4 +1,4 @@
-# DoctorWealth Books — Phase 1
+# DoctorWealth Books — Phases 1 & 2
 
 Money records for a doctor's family, rebuilt from the DoctorWealth blueprint. It is offline and written in **plain language**: accounts,
 categories, money in / money out, what I own & owe. Correct double entry runs underneath, and a separate **For my CA**
@@ -35,6 +35,34 @@ The **Money with family** screen records cash or bank money between You and Spou
 Editing or deleting a transfer changes both sides.
 
 **Phase 1 scope:** entities, masters, entry and core reports, plus the file imports from the old app.
+
+## Phase 2 — Investments
+
+Investments are ordinary entries (buy, sell, dividend, deposit, withdrawal) that carry the investment details. Holdings, FIFO lots and capital gains are worked out from those entries, so the portfolio always agrees with the main records.
+
+- **Types:** listed shares, equity / debt / gold mutual funds and ETFs, SGB, physical / digital gold, crypto, bonds, unlisted shares, property, FD, PPF, NPS. The type decides the tax treatment.
+- **Buy:** quantity, price and charges (charges are added to cost). For a SIP you can save without units and fill them in later.
+- **Sell:** a live FIFO preview shows which purchase lots are used. The profit is split automatically into short and long term, and booked to separate profit accounts (equity ST / LT, other ST / LT, crypto).
+- **Past holdings:** "Already own some" adds purchase lots from before you started using the app. The Portfolio flags any account whose balance does not match its investments, with a one-click fix.
+- **Splits and bonuses:** a bonus is a new lot dated on the allotment day at zero cost.
+- **Grandfathering:** for equity bought before February 2018, the 31 Jan 2018 value is used.
+- **FD / PPF / NPS:** deposits, interest (paid out or added to the investment), withdrawal and closing. The FD value is estimated with quarterly compounding.
+- **Capital gains report:** works by tax year.
+  - Equity: 20% short term; 12.5% long term above ₹1.25 lakh.
+  - Other assets: short term at your slab rate; 12.5% long term without indexation.
+  - Crypto: flat 30%, and losses are never set off.
+  - Set-off order: short-term losses against any gain, long-term losses only against long-term gains. Losses to carry forward are shown, along with a tax estimate.
+  - The rules live in `js/core/taxrules.js`, one table per tax year.
+- **Prices:** entered by you by default (offline). An optional online fetch can be switched on in Settings: mutual fund NAV from mfapi.in and crypto from CoinGecko. The Zerodha holdings import updates share prices and adds missing shares to the Portfolio.
+- **F&O / intraday:** a result per day or per month, with charges, STT and option premium. Turnover is |profit| + |loss| + premium received, with an audit-limit flag. F&O counts as business income and intraday as speculative.
+- **CA pack:** adds Capital gains (FIFO lines with ISIN and dates), Holdings and F&O sheets.
+
+**Detailed income / spending:** alongside quick entry, "Detailed income" and "Detailed expense" record more:
+- who paid or was paid, and how (cash / UPI / card / bank transfer / cheque)
+- reference number and bill / receipt number
+- GST and supplier GSTIN, for expenses
+
+These details are searchable in All entries and included in the CA pack's day book. A cheque that is not account-payee counts as cash for the presumptive-tax limit. Settings can make the detailed form the default.
 
 ## Run it
 
@@ -96,6 +124,5 @@ tests/      node --test suites
 
 ## Next phases
 
-2. Investments: lots, FIFO capital gains, SIPs, prices.
 3. Tax engine: Sec 58 / 44ADA vs actual, regimes, advance tax, ITR-3 schedules, 26AS/AIS.
 4. Imports & sync: Zerodha tradebook, MF/CoinDCX/AIS, device change-file sync, PIN and encryption.

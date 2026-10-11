@@ -101,7 +101,9 @@ export function combo(items, value, onPick, opts = {}) {
     }
     if (!shown.length && !opts.onCreate) list.appendChild(h('div.combo-opt.muted', 'No match'));
   }
-  inp.addEventListener('focus', () => { inp.select(); idx = Math.max(0, items.findIndex(i => i.id === current)); render(); });
+  /* open on click or typing, not on focus: an auto-focused field must not cover the fields below it */
+  inp.addEventListener('focus', () => { inp.select(); idx = Math.max(0, items.findIndex(i => i.id === current)); });
+  inp.addEventListener('click', () => { if (!list) render(); });
   inp.addEventListener('input', () => { idx = 0; render(); });
   inp.addEventListener('blur', () => setTimeout(() => { close(); if (inp.value.trim() === '') { if (current && !opts.required) { current = ''; onPick(''); } } else inp.value = labelOf(current); }, 120));
   inp.addEventListener('keydown', e => {

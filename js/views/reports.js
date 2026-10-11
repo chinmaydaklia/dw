@@ -5,6 +5,7 @@ import { periodControl, currentPeriod, priorPeriod, period } from '../ui/pickers
 import * as store from '../app/store.js';
 import { trialBalance, profitLoss, balanceSheet, cashFlow, netWorthSeries, analysis, cashDigital, family, ledgerStatement, dayBook } from '../core/books.js';
 import { TAX_TAGS, ROOTS, sectionFor } from '../core/masters.js';
+import { capitalGains, valueAsset, tradingSummary } from '../core/invest.js';
 import { lineChart, barChart } from '../ui/charts.js';
 import { fmtDate, fmtMonth, today, fyOf, fyRange } from '../lib/dates.js';
 import { t, isCA, groupName, ledgerName, kindName } from '../ui/terms.js';
@@ -191,7 +192,7 @@ export function renderCaPack(root) {
   add(root, h('div.card', h('div.card-b', { style: { paddingTop: '14px' } },
     h('p', { style: { marginTop: 0 } }, 'One Excel file with everything your accountant or CA needs for the year, in their language:'),
     h('ul.small', h('li', 'Trial balance, Profit & loss account, Balance sheet'), h('li', 'Day book — every entry with debit / credit'), h('li', 'Ledger-wise entries with running balances'),
-      h('li', 'TDS deducted by hospitals, cash vs digital receipts by month'), h('li', 'Chart of accounts with tax tags and section numbers'), h('li', 'Family gifts and money to be returned')),
+      h('li', 'TDS deducted by hospitals, cash vs digital receipts by month'), h('li', 'Capital gains (FIFO, with dates and ISIN), holdings, F&O / intraday summary'), h('li', 'Chart of accounts with tax tags and section numbers'), h('li', 'Family gifts and money to be returned')),
     h('div.btnrow', field('Person', sel), h('div', { style: { alignSelf: 'end' } }, periodControl(() => {})), h('button.btn.primary', { style: { alignSelf: 'end' }, onclick: async () => {
       status.textContent = 'Preparing…';
       try { await buildPack(sel.value, currentPeriod()); status.textContent = 'Downloaded.'; } catch (err) { status.textContent = 'Could not create the file: ' + err.message; }
@@ -230,8 +231,10 @@ async function buildPack(entityId, p) {
     [], ['', '', 'Total capital & liabilities', xr(b.totalLiabilities)], ['', '', 'Total assets', xr(b.totalAssets)]]);
 
   const days = dayBook(c, p).slice().reverse();
-  sheet('Day book', [...head('Day book'), ['Date', 'Voucher no.', 'Type', 'Ledger', 'Debit', 'Credit', 'Narration'],
-    ...days.flatMap(v => v.lines.map((l, i) => [i ? '' : v.date, i ? '' : v.no, i ? '' : VTYPES[v.type].name, LN(c.lById.get(l.ledgerId) || { name: '?' }), l.dr ? xr(l.dr) : '', l.cr ? xr(l.cr) : '', i ? '' : v.narration]))]);
+  const M = v => v.meta || {};
+  sheet('Day book', [...head('Day book'), ['Date', 'Voucher no.', 'Type', 'Ledger', 'Debit', 'Credit', 'Narration', 'Party', 'Mode', 'Ref no.', 'Bill no.', 'GST', 'GSTIN'],
+    ...days.flatMap(v => v.lines.map((l, i) => [i ? '' : v.date, i ? '' : v.no, i ? '' : VTYPES[v.type].name, LN(c.lById.get(l.ledgerId) || { name: '?' }), l.dr ? xr(l.dr) : '', l.cr ? xr(l.cr) : '', i ? '' : v.narration,
+      i ? '' : M(v).party || '', i ? '' : M(v).payMode || '', i ? '' : M(v).ref || '', i ? '' : M(v).billNo || '', i || !M(v).gst ? '' : xr(M(v).gst), i ? '' : M(v).gstin || '']))]);
 
   const ledRows = [];
   for (const l of c.ledgers) {
@@ -261,6 +264,15 @@ async function buildPack(entityId, p) {
   });
   sheet('Family transfers', [...head('Money with family members (gifts may attract clubbing of income)'), ['Date', 'Direction', 'Person', 'Kind', 'Amount', 'Narration'], ...famRows]);
 
+  const assets = store.assetsOf(entityId);
+  const cg = capitalGains(assets, c.vouchers, fy);
+  sheet('Capital gains', [...head('Capital gains (FIFO) – tax year ' + fy), ['Investment', 'ISIN', 'Class', 'Term', 'Bought on', 'Sold on', 'Quantity', 'Cost', 'Cost for tax (FMV 2018 rule)', 'Sale value', 'Gain'],
+    ...cg.rows.map(r => [r.asset.name, r.asset.isin || '', r.cls, r.term, r.buyDate, r.sellDate, r.qty, xr(r.cost), xr(r.taxCost), xr(r.proceeds), xr(r.taxGain)]),
+    [], ['Equity STCG', xr(cg.buckets.eqST)], ['Equity LTCG', xr(cg.buckets.eqLT)], ['Other STCG (slab)', xr(cg.buckets.othST)], ['Other LTCG', xr(cg.buckets.othLT)], ['VDA (crypto) income', xr(cg.buckets.vda)], ['VDA losses (ignored)', xr(cg.buckets.vdaLoss)], ['LTCG exemption used', xr(cg.exempt)], ['Estimated tax at special rates', xr(cg.taxSpecial)]]);
+  sheet('Holdings', [...head('Holdings as at ' + asOf + ' (FIFO, at cost)'), ['Investment', 'Type', 'ISIN / symbol', 'Quantity', 'Cost', 'Price', 'Value'],
+    ...assets.map(a => valueAsset(a, c.vouchers, asOf)).filter(x => x.cost || x.qty).map(x => [x.asset.name, x.type.name, x.asset.isin || x.asset.symbol || '', x.qty == null ? '' : x.qty, xr(x.cost), x.asset.price ? xr(x.asset.price) : '', xr(x.value)])]);
+  const ts = tradingSummary(c.vouchers, fy);
+  if (ts.segments.length) sheet('F&O intraday', [...head('Trading – tax year ' + fy), ['Segment', 'Entries', 'Profit', 'Loss', 'Charges', 'Net', 'Turnover'], ...ts.segments.map(x => [x.segment, x.count, xr(x.profit), xr(x.loss), xr(x.charges), xr(x.net), xr(x.turnover)]), [], ['F&O turnover', xr(ts.turnover)]]);
   sheet('Chart of accounts', [[ent.name + ' — chart of accounts'], [], ['Root', 'Group', 'Ledger', 'Tax tag', 'Section (' + fy + ')', 'Opening balance (+Dr / −Cr)'],
     ...c.ledgers.filter(l => !l.archived).map(l => [ROOTS[c.rootOf(l)].name, GN(c.groupOf(l)), LN(l), (TAX_TAGS[l.taxTag] || {}).label || '', sectionFor(l.taxTag, fy), xr(l.system === 'capital' ? 0 : l.opening || 0)])]);
 

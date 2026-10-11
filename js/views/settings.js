@@ -21,7 +21,13 @@ export function renderSettings(root) {
       h('td', h('span.ent-dot', { style: { background: x.accent, display: 'inline-block', marginRight: '8px' } }), h('b', x.name), x.kind === 'demo' ? h('span.pill.gold', { style: { marginLeft: '6px' } }, 'demo') : null, x.id === e.id ? h('span.pill', { style: { marginLeft: '6px' } }, 'showing now') : null),
       h('td.small.muted', S.vouchers.filter(v => v.entityId === x.id).length + ' entries' + (x.lockedUpto ? ' · closed up to ' + fmtDate(x.lockedUpto) : '')),
       h('td.r', h('button.btn.sm', { onclick: () => editEntity(x) }, 'Edit'))))))),
-    store.S.entities.some(x => x.kind === 'demo') ? null : h('p.small', h('a', { href: '#', onclick: async ev => { ev.preventDefault(); const d = await store.recreateDemo(); toast('Demo created'); store.setSettings({ activeEntityId: d.id }); } }, 'Bring back the demo')));
+    h('p.small', h('a', { href: '#', onclick: async ev => {
+      ev.preventDefault();
+      const old = store.S.entities.find(x => x.kind === 'demo');
+      if (old && !(await confirmBox('Refresh the demo?', 'The demo is deleted and created again with the latest sample data (including investments). Your real records are not touched.', 'Refresh demo'))) return;
+      if (old) await store.deleteEntity(old.id);
+      const d = await store.recreateDemo(); await store.setSettings({ activeEntityId: d.id }); toast('Demo ready');
+    } }, store.S.entities.some(x => x.kind === 'demo') ? 'Refresh the demo with the latest sample data' : 'Bring back the demo')));
 
   /* year lock */
   const cur = fyOf(today());
@@ -44,6 +50,8 @@ export function renderSettings(root) {
       h('div.btnrow', { style: { marginTop: '12px' } },
         h('label.check', h('input', { type: 'checkbox', checked: S.settings.caMode, onchange: ev => store.setSettings({ caMode: ev.target.checked }) }), h('span', 'Accountant words everywhere', h('div.small.muted', 'Shows ledger, debit / credit and voucher numbers on every page. Leave off for plain language — your CA has their own section anyway.'))),
         h('label.check', h('input', { type: 'checkbox', checked: S.settings.hideAmounts, onchange: ev => store.setSettings({ hideAmounts: ev.target.checked }) }), 'Hide amounts'),
+        h('label.check', h('input', { type: 'checkbox', checked: S.settings.detailedEntry, onchange: ev => store.setSettings({ detailedEntry: ev.target.checked }) }), h('span', 'Open income / spending with details', h('div.small.muted', 'who, how paid, reference and bill no. always shown'))),
+        h('label.check', h('input', { type: 'checkbox', checked: S.settings.onlinePrices, onchange: ev => store.setSettings({ onlinePrices: ev.target.checked }) }), h('span', 'Allow online prices', h('div.small.muted', 'mutual fund NAV (mfapi.in) and crypto (CoinGecko) — only when you tap Fetch'))),
         h('span.spacer'), h('button.btn.sm', { onclick: shortcutsHelp }, 'Keyboard shortcuts')))));
 
   /* backup */

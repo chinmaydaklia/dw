@@ -4,12 +4,12 @@ import { openModal, toast, confirmBox, amountInput, dateInput, select, field } f
 import { ledgerCombo } from '../ui/pickers.js';
 import * as store from '../app/store.js';
 import { S } from '../app/store.js';
-import { buildIncome, buildExpense, buildTransfer, buildInvestment, buildLoan, buildDailySummary, buildJournal, tidyLines, inferType, VTYPES, newVoucher } from '../core/vouchers.js';
+import { buildIncome, buildExpense, buildTransfer, buildLoan, buildDailySummary, tidyLines, inferType, VTYPES, newVoucher } from '../core/vouchers.js';
 import { parseQuick } from '../core/quick.js';
-import { makeLedger } from '../core/masters.js';
 import { pctOf, formatINR } from '../lib/money.js';
 import { t, kindName, ledgerName, isCA } from '../ui/terms.js';
 import { openFamilyTransfer } from './family.js';
+import { openInvestMenu, openBuy, openSell } from './invest.js';
 import { today, fmtDate, addDays } from '../lib/dates.js';
 import { debounce, clone } from '../lib/util.js';
 
@@ -56,7 +56,12 @@ export function openQuickAdd() {
   const qb = quickBar(() => md.close());
   const md = openModal({
     title: 'Add entry', size: 'wide',
-    body: h('div', qb, h('div.section-h', h('h2.small.muted', 'Or use a screen')),
+    body: h('div', qb,
+      h('div.btnrow', { style: { marginTop: '12px' } },
+        h('button.btn', { onclick: () => { md.close(); openEntry('income', { detailed: true }); } }, '↓ Detailed income'),
+        h('button.btn', { onclick: () => { md.close(); openEntry('expense', { detailed: true }); } }, '↑ Detailed expense'),
+        h('span.small.muted', 'with who, how paid, reference and bill no.')),
+      h('div.section-h', h('h2.small.muted', 'Or use a screen')),
       h('div.chips', KINDS.map(([k, label, key]) => h('button.chip', { onclick: () => { md.close(); openEntry(k); } }, label, key ? h('span.muted.small', ' ' + key) : null)),
         S.settings.caMode ? h('button.chip', { onclick: () => { md.close(); openEntry('journal'); } }, '✎ Accountant entry (Dr / Cr) F7') : null),
       shortcutChips(() => md.close()))
@@ -73,15 +78,16 @@ function shortcutChips(close) {
 export function openEntry(kind, preset = {}) {
   if (kind === 'journal') return openJournal(store.activeEntity().id, preset.draft || null);
   if (kind === 'family') return openFamilyTransfer();
+  if (kind === 'investment') return openInvestMenu();
+  const detailed = preset.detailed ?? S.settings.detailedEntry;
   const entity = store.activeEntity();
   const c = store.ctxOf(entity.id);
-  if (kind === 'investment' && !c.ledgers.some(l => l.taxTag === 'capital_gain')) { ensureGainLedger(c).then(() => openEntry(kind, preset)); return; }
   const st = { date: preset.date || lastDate, narration: '', siteId: '', owner: '', custom: '' };
   const body = h('div');
   const previewEl = h('div.vpreview');
   let build = () => null;
   const L = name => (c.ledgers.find(l => l.name === name && !l.archived) || {}).id || '';
-  const firstOf = filter => { const it = c.ledgers.find(l => !l.archived && filter(l)); return it ? it.id : ''; };
+  const firstOf = filter => { const it = c.ledgers.filter(l => !l.archived && filter(l)).sort((x, y) => (x.order || 0) - (y.order || 0))[0]; return it ? it.id : ''; };
   const defMoney = S.settings.defaultMoney[entity.id] || L('Cash in Hand') || firstOf(l => ['bank', 'cash'].includes(c.natureOf(l)));
   const siteSel = select([{ value: '', label: '— no site —' }, ...(entity.sites || []).map(s => ({ value: s.id, label: s.name }))], '', { onchange: e => { st.siteId = e.target.value; refresh(); } });
   const ownerSel = select([{ value: '', label: '— owner —' }, ...S.settings.owners.map(o => ({ value: o, label: o }))], '', { onchange: e => { st.owner = e.target.value; } });
@@ -113,10 +119,13 @@ export function openEntry(kind, preset = {}) {
         field('Received in', moneyCombo),
         h('div.grid', { style: { alignContent: 'end' } }, h('label.check', tdsChk, 'Hospital cut TDS'), h('label.check', splitChk, 'Part cash, part digital'))),
         tdsWrap, splitWrap);
+      const det = detailsBlock('income', detailed, c.natureOf(c.lById.get(s.money) || {}));
+      add(body, det.el);
       build = () => {
         const g = gross.paise(), t = s.tdsOn ? tds.paise() : 0;
         if (!s.inc || !g) return null;
-        const p = { date: st.date, incomeLedgerId: s.inc, moneyLedgerId: s.money, tdsLedgerId: c.ledgers.find(l => l.taxTag === 'tds_receivable').id, gross: g, tds: t, narration: st.narration, tags: tags() };
+        const meta = det.get();
+        const p = { date: st.date, incomeLedgerId: s.inc, moneyLedgerId: s.money, tdsLedgerId: c.ledgers.find(l => l.taxTag === 'tds_receivable').id, gross: g, tds: t, narration: st.narration || meta.party || '', tags: tags(), meta };
         if (s.split && cashPart.paise()) p.split = [{ ledgerId: s.money2, amount: cashPart.paise() }, { ledgerId: s.money, amount: g - t - cashPart.paise() }];
         return buildIncome(c, p);
       };
@@ -138,10 +147,13 @@ export function openEntry(kind, preset = {}) {
       drawRows();
       add(body, h('div.grid.g2', field('Paid from', ledgerCombo(c, 'pay', s.money, id => { s.money = id; refresh(); }))), rows,
         h('div', { style: { marginTop: '6px' } }, h('button.btn.sm', { onclick: () => { s.splits.push({ ledgerId: '', amount: 0 }); drawRows(); } }, '+ Split into another category')));
+      const det = detailsBlock('expense', detailed, c.natureOf(c.lById.get(s.money) || {}));
+      add(body, det.el);
       build = () => {
         const sp = s.splits.filter(x => x.ledgerId && x.amount);
         if (!sp.length || !s.money) return null;
-        return buildExpense(c, { date: st.date, moneyLedgerId: s.money, splits: sp, narration: st.narration, tags: tags() });
+        const meta = det.get();
+        return buildExpense(c, { date: st.date, moneyLedgerId: s.money, splits: sp, narration: st.narration || meta.party || '', tags: tags(), meta });
       };
     },
     transfer() {
@@ -150,40 +162,6 @@ export function openEntry(kind, preset = {}) {
       add(body, h('div.grid.g3', field('From', ledgerCombo(c, 'all', s.from, id => { s.from = id; refresh(); })), field('To', ledgerCombo(c, 'all', s.to, id => { s.to = id; refresh(); })), field('Amount', a)),
         h('p.small.muted', 'Your own money moving: bank to cash, paying the credit-card bill, opening an FD, paying advance tax, adding money to Zerodha. For money with your spouse use “Give / get money from family”.'));
       build = () => (s.from && s.to && a.paise() && s.from !== s.to ? buildTransfer(c, { date: st.date, fromLedgerId: s.from, toLedgerId: s.to, amount: a.paise(), narration: st.narration, tags: tags() }) : null);
-    },
-    investment() {
-      const s = { kind: 'invest', inv: '', money: defMoney, gain: '', income: '' };
-      const a = amountInput(0, { oninput: refresh }), cost = amountInput(0, { oninput: refresh });
-      const seg = h('div.seg', [['invest', 'Invest / buy'], ['redeem', 'Redeem / sell'], ['income', 'Dividend / interest']].map(([k, lbl]) => h('button', { class: k === s.kind ? 'on' : '', onclick: e => { s.kind = k; seg.querySelectorAll('button').forEach(b => b.classList.toggle('on', b === e.target)); draw(); } }, lbl)));
-      const inner = h('div');
-      const draw = () => {
-        clear(inner);
-        if (s.kind === 'income') {
-          add(inner, h('div.grid.g3', field('What is this income?', ledgerCombo(c, 'income', s.income || L('Dividend'), id => { s.income = id; refresh(); })), field('Received in', ledgerCombo(c, 'money', s.money, id => { s.money = id; refresh(); })), field('Amount', a)));
-          s.income = s.income || L('Dividend');
-        } else {
-          add(inner, h('div.grid.g3', field('Investment', ledgerCombo(c, 'invest', s.inv, id => { s.inv = id; refresh(); })),
-            field(s.kind === 'invest' ? 'Paid from' : 'Proceeds received in', ledgerCombo(c, 'money', s.money, id => { s.money = id; refresh(); })),
-            field(s.kind === 'invest' ? 'Amount invested' : 'Sale proceeds', a)));
-          if (s.kind === 'redeem') add(inner, h('div.grid.g3', field('Cost of what was sold', cost, 'blank = same as proceeds (no gain)'), field('Profit / loss goes to', ledgerCombo(c, 'income', s.gain || gainLedger(), id => { s.gain = id; refresh(); }))), h('p.small.muted', 'Automatic profit calculation (short / long term) comes in the next phase; for now enter what you had paid for the units you sold.'));
-        }
-        refresh();
-      };
-      const gainLedger = () => { const g = c.ledgers.find(l => l.taxTag === 'capital_gain'); return g ? g.id : ''; };
-      add(body, seg, h('div', { style: { height: '10px' } }), inner);
-      draw();
-      build = () => {
-        const v = a.paise(); if (!v || !s.money) return null;
-        if (s.kind === 'income') return s.income ? buildIncome(c, { date: st.date, incomeLedgerId: s.income, moneyLedgerId: s.money, gross: v, narration: st.narration, tags: tags() }) : null;
-        if (!s.inv) return null;
-        if (s.kind === 'redeem') {
-          const gl = s.gain || gainLedger();
-          const cp = cost.value.trim() ? cost.paise() : v;
-          if (cp !== v && !gl) return null;
-          return buildInvestment(c, { date: st.date, kind: 'redeem', investLedgerId: s.inv, moneyLedgerId: s.money, amount: v, cost: cp, gainLedgerId: gl, narration: st.narration, tags: tags() });
-        }
-        return buildInvestment(c, { date: st.date, kind: 'invest', investLedgerId: s.inv, moneyLedgerId: s.money, amount: v, narration: st.narration, tags: tags() });
-      };
     },
     loan() {
       const s = { kind: 'repay', loan: '', money: defMoney, interest: '' };
@@ -223,7 +201,7 @@ export function openEntry(kind, preset = {}) {
       build = () => (s.inc && (cash.paise() || dig.paise()) ? buildDailySummary(c, { date: st.date, siteId: st.siteId, incomeLedgerId: s.inc, cashLedgerId: s.cash, digitalLedgerId: s.digital, cash: cash.paise(), digital: dig.paise(), visits: Number(visits.value) || 0, narration: st.narration || 'Daily summary', tags: tags() }) : null);
     }
   };
-  const titles = { income: 'Money received', expense: 'Money spent', transfer: 'Move money between my accounts', investment: 'Investment', loan: 'Loan / EMI', daily: 'Clinic / hospital daily total' };
+  const titles = { income: detailed ? 'Money received — detailed' : 'Money received', expense: detailed ? 'Money spent — detailed' : 'Money spent', transfer: 'Move money between my accounts', loan: 'Loan / EMI', daily: 'Clinic / hospital daily total' };
   forms[kind]();
   add(body, h('div.grid.g4', { style: { marginTop: '10px' } }, field('Date', dateEl), h('div.span3', field('Note', narrEl))),
     h('details', { style: { marginTop: '8px' } }, h('summary.small.muted', 'Site, owner and labels (optional)'), h('div.grid.g3', { style: { marginTop: '8px' } }, field('Site', siteSel), field('Owner', ownerSel), field('Labels', customInp))),
@@ -256,12 +234,7 @@ export function openEntry(kind, preset = {}) {
   refresh();
 }
 function safe(fn) { try { return fn(); } catch (e) { return null; } }
-function defaultDigital(c) { const b = c.ledgers.find(l => !l.archived && c.natureOf(l) === 'bank'); return b ? b.id : ''; }
-async function ensureGainLedger(c) {
-  if (c.ledgers.some(l => l.taxTag === 'capital_gain')) return;
-  const g = c.groups.find(x => x.key === 'othinc') || c.groups.find(x => x.root === 'income');
-  if (g) await store.saveLedger(makeLedger({ entityId: c.entity.id, groupId: g.id, name: 'Profit on selling investments', taxTag: 'capital_gain', note: 'Next phase splits this into short / long term automatically.' }));
-}
+function defaultDigital(c) { const b = c.ledgers.filter(l => !l.archived && c.natureOf(l) === 'bank').sort((x, y) => (x.order || 0) - (y.order || 0) || x.name.localeCompare(y.name))[0]; return b ? b.id : ''; }
 
 /* Where the money goes, in words: "From SBI Savings → To Petrol" (plain) or Dr / Cr (accountant view) */
 export function linesPreview(c, lines) {
@@ -271,6 +244,49 @@ export function linesPreview(c, lines) {
     cr.map(l => h('div.ln', h('span.cr', 'Cr ', h('b', name(l.ledgerId))), h('span.amt', money(l.cr)))));
   return h('div', cr.map(l => h('div.ln', h('span', 'From ', h('b', name(l.ledgerId))), h('span.amt', money(l.cr)))),
     dr.map(l => h('div.ln', h('span', '→ To ', h('b', name(l.ledgerId))), h('span.amt', money(l.dr)))));
+}
+
+/* Optional details for income / spending: who, how it was paid, reference and bill numbers, GST.
+   Saved on the entry (meta) and shown in All entries, the entry view and the CA pack. */
+const PAY_MODES = [['', '—'], ['cash', 'Cash'], ['upi', 'UPI'], ['card', 'Card'], ['bank', 'Bank transfer (NEFT / IMPS / RTGS)'], ['cheque', 'Cheque'], ['other', 'Other']];
+function detailsBlock(kind, open, moneyNature) {
+  const parties = [...new Set(S.vouchers.map(v => v.meta && v.meta.party).filter(Boolean))].sort();
+  const listId = 'parties-' + Math.random().toString(36).slice(2, 8);
+  const party = h('input.inp', { list: listId, placeholder: kind === 'income' ? 'e.g. PNH Hospital, patient name not needed' : 'e.g. shop, landlord, supplier' });
+  const mode = select(PAY_MODES.map(([v, l]) => ({ value: v, label: l })), '');
+  const ref = h('input.inp', { placeholder: 'UPI ref / cheque no. / UTR' });
+  const bill = h('input.inp', { placeholder: kind === 'income' ? 'receipt / invoice no.' : 'bill / invoice no.' });
+  const gst = amountInput(0);
+  const gstin = h('input.inp', { placeholder: '15-character GSTIN (optional)', maxLength: 15 });
+  const ap = h('input', { type: 'checkbox', checked: true });
+  const apWrap = h('label.check.small', ap, h('span', 'Account-payee cheque', h('div.muted', 'A cheque that is not account-payee counts as cash for the tax limit')));
+  const syncAp = () => apWrap.classList.toggle('hide', !(kind === 'income' && mode.value === 'cheque'));
+  mode.addEventListener('change', syncAp);
+  const guessMode = nat => { if (!mode.value) mode.value = nat === 'cash' ? 'cash' : nat === 'card' ? 'card' : ''; syncAp(); };
+  guessMode(moneyNature);
+  const el = h('details', { open: !!open, style: { marginTop: '10px' } }, h('summary', h('b', 'Details'), h('span.small.muted', ' — who, how paid, reference, bill no.' + (kind === 'expense' ? ', GST' : ''))),
+    h('datalist', { id: listId }, parties.map(p => h('option', { value: p }))),
+    h('div.grid.g3', { style: { marginTop: '8px' } }, field(kind === 'income' ? 'Received from' : 'Paid to', party), field('How', mode), field('Reference no.', ref),
+      field(kind === 'income' ? 'Receipt no.' : 'Bill no.', bill),
+      kind === 'expense' ? field('GST included in bill', gst, 'for your CA') : apWrap,
+      kind === 'expense' ? field('Supplier GSTIN', gstin) : h('span')));
+  syncAp();
+  return {
+    el, guessMode,
+    get() {
+      const m = {};
+      if (party.value.trim()) m.party = party.value.trim();
+      if (mode.value) m.payMode = mode.value;
+      if (ref.value.trim()) m.ref = ref.value.trim();
+      if (bill.value.trim()) m.billNo = bill.value.trim();
+      if (kind === 'expense' && gst.paise()) m.gst = gst.paise();
+      if (kind === 'expense' && gstin.value.trim()) m.gstin = gstin.value.trim().toUpperCase();
+      /* cash vs digital for the presumptive limit: cash, or a cheque that is not account-payee, counts as cash */
+      if (kind === 'income' && (mode.value === 'cash' || (mode.value === 'cheque' && !ap.checked))) m.mode = 'cash';
+      else if (kind === 'income' && mode.value && mode.value !== 'cash') m.mode = 'digital';
+      return m;
+    }
+  };
 }
 
 /* ---------- full voucher form (journal / pro mode, and editing any voucher) ---------- */
@@ -355,7 +371,14 @@ export async function openVoucher(id) {
   const tot = v.lines.reduce((t, l) => t + (l.dr || 0), 0);
   const meta = [];
   if (v.meta && v.meta.visits) meta.push('Patients: ' + v.meta.visits);
-  if (v.meta && v.meta.mode) meta.push(v.meta.mode === 'cash' ? 'Received in cash' : 'Received digitally');
+  if (v.meta && v.meta.mode) meta.push(v.meta.mode === 'cash' ? 'Counts as cash' : 'Received digitally');
+  const M = v.meta || {};
+  if (M.party) meta.push((v.type === 'receipt' ? 'From: ' : 'To: ') + M.party);
+  if (M.payMode) meta.push('How: ' + (PAY_MODES.find(x => x[0] === M.payMode) || [, M.payMode])[1]);
+  if (M.ref) meta.push('Ref: ' + M.ref);
+  if (M.billNo) meta.push('Bill no.: ' + M.billNo);
+  if (M.gst) meta.push('GST ' + money(M.gst) + (M.gstin ? ' · ' + M.gstin : ''));
+  if (M.inv && M.inv.qty) meta.push('Quantity: ' + M.inv.qty);
   if (v.meta && v.meta.bankNarration && v.meta.bankNarration !== v.narration) meta.push('Bank: ' + v.meta.bankNarration);
   if (v.batchId) meta.push('Imported from a file');
   if (v.recurringId) meta.push('Repeating entry');
@@ -370,7 +393,7 @@ export async function openVoucher(id) {
     foot: [h('button.btn.left', { onclick: () => { md.close(); saveShortcut(v); } }, '★ Save as shortcut'),
       pair ? null : h('button.btn', { onclick: () => { md.close(); const d = clone(v); openJournal(v.entityId, { type: d.type, date: today(), narration: d.narration, lines: d.lines, tags: d.tags, src: d.src, meta: d.meta }, { title: 'Duplicate' }); } }, 'Duplicate'),
       pair ? h('button.btn.danger', { disabled: locked, onclick: async () => { if (await confirmBox('Delete this family transfer?', 'It is removed from both people’s records.', 'Delete', true)) { try { await store.deleteVoucher(v.id); md.close(); toast('Deleted'); } catch (e) { toast(e.message); } } } }, 'Delete') : null,
-      h('button.btn.primary', { disabled: locked, onclick: () => { md.close(); if (pair) openFamilyTransfer(v.pairId); else openJournal(v.entityId, null, { existing: v }); } }, locked ? 'Year closed' : 'Edit')]
+      h('button.btn.primary', { disabled: locked, onclick: () => { md.close(); if (pair) openFamilyTransfer(v.pairId); else if (M.inv && M.inv.action === 'buy') openBuy('', v); else if (M.inv && M.inv.action === 'sell') openSell('', v); else openJournal(v.entityId, null, { existing: v }); } }, locked ? 'Year closed' : 'Edit')]
   });
 }
 function diffText(a, b) {

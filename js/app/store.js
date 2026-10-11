@@ -1,22 +1,22 @@
 /* In-memory state backed by IndexedDB. All writes go through here so audit, numbering, validation,
    locking and persistence are applied in one place. */
 import * as DB from './db.js';
-import { makeEntity, seedMasters, makeLedger, GROUP_TEMPLATE, OLD_GROUP_NAMES, SYSTEM_NAMES, OLD_LEDGER_NAMES } from '../core/masters.js';
+import { makeEntity, seedMasters, makeLedger, GROUP_TEMPLATE, OLD_GROUP_NAMES, SYSTEM_NAMES, OLD_LEDGER_NAMES, GAIN_LEDGERS } from '../core/masters.js';
 import { makeCtx } from '../core/books.js';
 import { validateVoucher, nextNumber, newVoucher } from '../core/vouchers.js';
 import { buildDemo } from '../core/demo.js';
 import { uid, nowISO, clone } from '../lib/util.js';
 import { today, fyOf } from '../lib/dates.js';
 
-export const APP_VERSION = '1.1.0';
-export const SCHEMA_VERSION = 2;
-const COLLS = ['entities', 'groups', 'ledgers', 'vouchers', 'rules', 'recurring', 'shortcuts', 'batches', 'holdings', 'taxpnl'];
+export const APP_VERSION = '1.2.0';
+export const SCHEMA_VERSION = 3;
+const COLLS = ['entities', 'groups', 'ledgers', 'vouchers', 'rules', 'recurring', 'shortcuts', 'batches', 'holdings', 'taxpnl', 'assets'];
 
 export const S = {
-  entities: [], groups: [], ledgers: [], vouchers: [], rules: [], recurring: [], shortcuts: [], batches: [], holdings: [], taxpnl: [],
+  entities: [], groups: [], ledgers: [], vouchers: [], rules: [], recurring: [], shortcuts: [], batches: [], holdings: [], taxpnl: [], assets: [],
   settings: {}, persistence: null, version: 0
 };
-const DEFAULT_SETTINGS = { activeEntityId: '', theme: 'auto', hideAmounts: false, proMode: false, lastBackupAt: '', fy: fyOf(today()), owners: ['Me', 'Spouse', 'Joint'], defaultMoney: {}, lastSnapshotAt: '', caMode: false };
+const DEFAULT_SETTINGS = { activeEntityId: '', theme: 'auto', hideAmounts: false, proMode: false, lastBackupAt: '', fy: fyOf(today()), owners: ['Me', 'Spouse', 'Joint'], defaultMoney: {}, lastSnapshotAt: '', caMode: false, onlinePrices: false, detailedEntry: false };
 
 const subs = new Set();
 export function subscribe(fn) { subs.add(fn); return () => subs.delete(fn); }
@@ -38,7 +38,9 @@ const MIGRATIONS = {
       else if (OLD_LEDGER_NAMES[l.name]) { l.name = OLD_LEDGER_NAMES[l.name]; ops.push({ store: 'ledgers', put: l }); }
     }
     await DB.write(ops);
-  }
+  },
+  /* v2 -> v3: investments (Phase 2). The new "assets" store is created by the IndexedDB upgrade; nothing to convert. */
+  2: async () => {}
 };
 
 export async function init() {
@@ -79,11 +81,12 @@ function demoOps() {
   const d = buildDemo({ upto: today() });
   numberAll(d.vouchers);
   S.entities.push(d.entity); S.groups.push(...d.groups); S.ledgers.push(...d.ledgers); S.vouchers.push(...d.vouchers);
-  S.recurring.push(...d.recurring); S.rules.push(...d.rules);
+  S.recurring.push(...d.recurring); S.rules.push(...d.rules); S.assets.push(...(d.assets || []));
   return {
     entity: d.entity,
     ops: [{ store: 'entities', put: d.entity }, ...d.groups.map(g => ({ store: 'groups', put: g })), ...d.ledgers.map(l => ({ store: 'ledgers', put: l })),
-      ...d.vouchers.map(v => ({ store: 'vouchers', put: v })), ...d.recurring.map(r => ({ store: 'recurring', put: r })), ...d.rules.map(r => ({ store: 'rules', put: r }))]
+      ...d.vouchers.map(v => ({ store: 'vouchers', put: v })), ...d.recurring.map(r => ({ store: 'recurring', put: r })), ...d.rules.map(r => ({ store: 'rules', put: r })),
+      ...(d.assets || []).map(a => ({ store: 'assets', put: a }))]
   };
 }
 function numberAll(vouchers) {
@@ -306,3 +309,37 @@ export async function snapshot(reason) {
 }
 export const listSnapshots = async () => (await DB.getAll('backups')).sort((a, b) => b.at.localeCompare(a.at));
 export const listAudit = async () => (await DB.getAll('audit')).sort((a, b) => b.at.localeCompare(a.at));
+
+/* ---------- investments ---------- */
+export const assetsOf = entityId => S.assets.filter(a => a.entityId === entityId);
+export const asset = id => S.assets.find(a => a.id === id);
+export async function saveAsset(a) {
+  const prev = asset(a.id);
+  a.updatedAt = nowISO();
+  await commit([{ store: 'assets', put: clone(a) }, auditOp(a.entityId, prev ? 'update' : 'create', 'asset', a.id, a.name, prev, a)]);
+}
+export async function deleteAsset(id) {
+  const a = asset(id); if (!a) return;
+  const n = S.vouchers.filter(v => v.meta && v.meta.inv && v.meta.inv.assetId === id).length;
+  if (n) throw new Error(`“${a.name}” has ${n} entr${n === 1 ? 'y' : 'ies'}. Delete those first, or hide it.`);
+  await commit([{ store: 'assets', del: id }, auditOp(a.entityId, 'delete', 'asset', id, a.name, a, null)]);
+}
+/* an account by name in a section, created if missing (used for investment type accounts) */
+export async function ensureLedgerNamed(entityId, groupKey, name, extra = {}) {
+  const found = S.ledgers.find(l => l.entityId === entityId && !l.archived && l.name.toLowerCase() === name.toLowerCase());
+  if (found) return found;
+  const g = S.groups.find(x => x.entityId === entityId && x.key === groupKey) || S.groups.find(x => x.entityId === entityId && x.key === 'invest');
+  const l = makeLedger({ entityId, groupId: g.id, name, ...extra });
+  await saveLedger(l);
+  return l;
+}
+/* profit / trading accounts (see GAIN_LEDGERS), created on first use */
+export async function ensureGainLedger(entityId, key) {
+  const def = GAIN_LEDGERS[key];
+  const found = S.ledgers.find(l => l.entityId === entityId && l.system === key);
+  if (found) return found;
+  const g = S.groups.find(x => x.entityId === entityId && x.key === (def.expense ? 'profexp' : 'othinc')) || S.groups.find(x => x.entityId === entityId && x.root === (def.expense ? 'expense' : 'income'));
+  const l = makeLedger({ entityId, groupId: g.id, name: def.name, system: key, taxTag: def.tag });
+  await saveLedger(l);
+  return l;
+}
