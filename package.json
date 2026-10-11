@@ -1,0 +1,11 @@
+{
+  "name": "doctorwealth-books",
+  "version": "1.0.0",
+  "private": true,
+  "description": "DoctorWealth rebuild: offline double-entry books for a doctor's family (Phase 1).",
+  "type": "module",
+  "scripts": {
+    "test": "node --test \"tests/*.test.js\"",
+    "serve": "python3 -m http.server 8080"
+  }
+}
