@@ -1,6 +1,6 @@
 /* DoctorWealth Books service worker: the whole app (code + bundled libraries) is cached so it opens and
    works with no network. A new version waits until the user taps "Reload" in the app. */
-const VERSION = '1.2.0';
+const VERSION = '1.3.0';
 const CACHE = 'dwb-' + VERSION;
 const SHELL = [
   './', './index.html', './manifest.webmanifest', './css/app.css',

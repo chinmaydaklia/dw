@@ -20,7 +20,7 @@ export function renderDashboard(root) {
 
   add(root, h('div.kpis',
     kpi('Net worth', amt(hd.netWorth), `Own ${money(hd.assets, { compact: true })} · Owe ${money(hd.liabilities, { compact: true })}`, () => go('bs')),
-    kpi('Cash & bank', amt(hd.cash + hd.bank), `Cash ${money(hd.cash, { compact: true })} · Bank ${money(hd.bank, { compact: true })}`, () => go('ledgers')),
+    kpi('Cash & bank', amt(hd.cash + hd.bank + hd.wallets), `Cash ${money(hd.cash, { compact: true })} · Bank ${money(hd.bank, { compact: true })}` + (hd.wallets ? ` · Wallets ${money(hd.wallets, { compact: true })}` : ''), () => go('ledgers')),
     kpi('Income · ' + p.label, amt(hd.income, { cls: 'in' }), `Spent ${money(hd.expense, { compact: true })} · Saved ${money(hd.surplus, { compact: true, sign: true })}`, () => go('pl')),
     kpi('Practice income', amt(hd.prof.receipts), `After practice expenses ${money(hd.prof.net, { compact: true })}`, () => go('cash'))));
 

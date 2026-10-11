@@ -15,14 +15,14 @@ export function ledgerItems(ctx, filter = 'all') {
 const nat = (l, c) => c.natureOf(l);
 const FILTERS = {
   all: () => true,
-  money: (l, c) => ['cash', 'bank'].includes(nat(l, c)),
-  pay: (l, c) => ['cash', 'bank', 'card'].includes(nat(l, c)),
+  money: (l, c) => ['cash', 'bank', 'wallet'].includes(nat(l, c)),
+  pay: (l, c) => ['cash', 'bank', 'card', 'wallet'].includes(nat(l, c)),
   income: (l, c) => c.rootOf(l) === 'income',
   expense: (l, c) => c.rootOf(l) === 'expense',
   invest: (l, c) => ['investment', 'fixed'].includes(nat(l, c)),
   loanTaken: (l, c) => c.rootOf(l) === 'liability' && nat(l, c) !== 'card',
   loanGiven: (l, c) => ['advance'].includes(nat(l, c)),
-  nonMoney: (l, c) => !['cash', 'bank'].includes(nat(l, c))
+  nonMoney: (l, c) => !['cash', 'bank', 'wallet'].includes(nat(l, c))
 };
 /* Restrict group choices for a filter when creating a ledger inline */
 const CREATE_ROOT = { income: 'income', expense: 'expense', invest: 'asset', money: 'asset', pay: 'asset', loanTaken: 'liability', loanGiven: 'asset' };

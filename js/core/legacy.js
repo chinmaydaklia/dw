@@ -60,7 +60,8 @@ export function legacyBalances(s) {
   return m;
 }
 
-const ACC_GROUP = { bank: 'bank', cash: 'cash', card: 'cards', investment: 'invest', wallet: 'bank', business: 'bank', spouse: 'bank' };
+/* the old app's 'investment' accounts were broker wallets (Kite Wallet, CoinDCX): money accounts, not investments */
+const ACC_GROUP = { bank: 'bank', cash: 'cash', card: 'cards', investment: 'wallets', wallet: 'wallets', business: 'bank', spouse: 'bank' };
 const INV_LEDGER = t => {
   const s = String(t || '').toLowerCase();
   if (/stock|etf|share|equity/.test(s)) return 'Stocks';
@@ -107,7 +108,7 @@ export function suggestMapping(s, targets) {
   };
   for (const a of s.accounts) {
     const o = ownerOfAccount(s, a.id);
-    const nat = { bank: ['bank'], wallet: ['bank'], business: ['bank'], spouse: ['bank'], cash: ['cash'], card: ['card'], investment: ['investment'] }[a.type] || null;
+    const nat = { bank: ['bank'], wallet: ['wallet', 'bank'], business: ['bank'], spouse: ['bank'], cash: ['cash'], card: ['card'], investment: ['wallet'] }[a.type] || null;
     map['acc:' + a.id] = find(o, a.name, nat);
   }
   for (const c of s.incomeCats) for (const o of ['me', 'spouse']) map[o + ':inc:' + c.id] = find(o, c.name, ['profincome', 'otherincome']);

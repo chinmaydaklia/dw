@@ -71,7 +71,7 @@ export function buildDemo({ upto = today(), order = 9 } = {}) {
     }
     if (d.slice(5) === '09-30') {
       const pl = 18400_00, ch = 1650_00;
-      add({ type: 'receipt', src: 'trading', date: d, narration: 'F&O options – September', lines: [{ ledgerId: L('Zerodha Funds (Kite)'), dr: pl - ch, cr: 0 }, { ledgerId: gainLedger('trade_charges'), dr: ch, cr: 0 }, { ledgerId: gainLedger('trade_fo'), dr: 0, cr: pl }], meta: { trade: { segment: 'options', pl, charges: ch, stt: 600_00, premium: 72000_00 } } });
+      add({ type: 'receipt', src: 'trading', date: d, narration: 'F&O options – September', lines: [{ ledgerId: L('Zerodha wallet (Kite funds)'), dr: pl - ch, cr: 0 }, { ledgerId: gainLedger('trade_charges'), dr: ch, cr: 0 }, { ledgerId: gainLedger('trade_fo'), dr: 0, cr: pl }], meta: { trade: { segment: 'options', pl, charges: ch, stt: 600_00, premium: 72000_00 } } });
     }
     if (day === 12) add(buildTransfer(ctx, { date: d, fromLedgerId: L('Cash in Hand'), toLedgerId: L('Bank of Baroda'), amount: amt(12000, 22000), narration: 'Cash deposited' }));
     if (day === 15) {

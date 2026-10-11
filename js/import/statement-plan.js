@@ -37,7 +37,8 @@ function fpIndex(ctx, ledgerId) {
   return idx;
 }
 
-export function planRows(ctx, ledgerId, parsed, rules, suspenseId) {
+/* autoMap(narration, dir) → { ledgerId, hint } suggests a category when no rule matches (e.g. broker wallet, mutual fund) */
+export function planRows(ctx, ledgerId, parsed, rules, suspenseId, autoMap = null) {
   const idx = fpIndex(ctx, ledgerId);
   const used = new Map(), seen = new Map();
   /* soft index: same ledger, same signed amount, within ±3 days (manual entries made before the import) */
@@ -53,6 +54,7 @@ export function planRows(ctx, ledgerId, parsed, rules, suspenseId) {
     };
     const hit = ruleMatch(rules, t.narration, dir);
     if (hit && ctx.lById.has(hit.ledgerId)) { r.counterId = hit.ledgerId; r.rule = hit.pattern; }
+    else if (autoMap) { const m = autoMap(t.narration, dir); if (m && ctx.lById.has(m.ledgerId) && m.ledgerId !== ledgerId) { r.counterId = m.ledgerId; r.hint = m.hint; } }
     const cand = idx.get(fp) || []; const k = used.get(fp) || 0;
     if (k < cand.length) { r.dup = { voucher: cand[k] }; used.set(fp, k + 1); r.include = false; }
     else if (seen.has(fp)) { r.dup = { row: seen.get(fp) }; r.include = false; }

@@ -230,3 +230,43 @@ export function unlinked(ctx, assets, valuations) {
   return out;
 }
 export const LT_DATE = (cls, rules, buyDate) => { const r = rules[cls]; return r && r.ltMonths ? addMonths(buyDate, r.ltMonths) : ''; };
+
+/* ---------- avoiding double entry ----------
+   Money can reach an investment account from a bank-statement import, a transfer or the old app without saying
+   which investment it bought. Those entries are listed so they can be LINKED (the same entry gains the
+   investment details) instead of a second entry being added. */
+export function investmentLedgerIds(ctx, assets) {
+  const typical = new Set(Object.values(ASSET_TYPES).map(t => t.ledger));
+  const used = new Set(assets.filter(a => a.entityId === ctx.entity.id).map(a => a.ledgerId));
+  return new Set(ctx.ledgers.filter(l => used.has(l.id) || typical.has(l.name) || ctx.natureOf(l) === 'investment').map(l => l.id));
+}
+export function unlinkedEntries(ctx, assets) {
+  const inv = investmentLedgerIds(ctx, assets);
+  const out = [];
+  for (const v of ctx.vouchers) {
+    if ((v.meta && (v.meta.inv || v.meta.trade)) || v.src === 'family') continue;
+    const byLedger = new Map();
+    for (const ln of v.lines) if (inv.has(ln.ledgerId)) byLedger.set(ln.ledgerId, (byLedger.get(ln.ledgerId) || 0) + lineAmt(ln));
+    for (const [ledgerId, net] of byLedger) {
+      if (!net) continue;
+      out.push({ voucher: v, ledgerId, amount: Math.abs(net), dir: net > 0 ? 'in' : 'out', date: v.date });
+    }
+  }
+  return out.sort((a, b) => b.date.localeCompare(a.date));
+}
+/* entries that look like the same money as a purchase being typed in (same amount, within a few days) */
+export function sameMoney(ctx, assets, { amount, date, days = 5 }) {
+  const lo = new Date(Date.parse(date) - days * 864e5).toISOString().slice(0, 10);
+  const hi = new Date(Date.parse(date) + days * 864e5).toISOString().slice(0, 10);
+  return unlinkedEntries(ctx, assets).filter(u => u.dir === 'in' && u.amount === amount && u.date >= lo && u.date <= hi);
+}
+/* Turn an existing entry into a purchase / deposit of `asset`. The money side is untouched; the investment
+   line moves to the asset's account if it was booked to another investment account. */
+export function linkAsPurchase(voucher, ledgerId, asset, qty) {
+  const t = typeOf(asset);
+  const amount = voucher.lines.filter(l => l.ledgerId === ledgerId).reduce((s, l) => s + lineAmt(l), 0);
+  const lines = voucher.lines.map(l => (l.ledgerId === ledgerId ? { ...l, ledgerId: asset.ledgerId } : l));
+  const inv = t.units ? { assetId: asset.id, action: 'buy', qty: qty > 0 ? qty : 0, cost: amount, price: qty > 0 ? Math.round(amount / qty) : 0, charges: 0, linked: true }
+    : { assetId: asset.id, action: 'deposit', amount, linked: true };
+  return { ...voucher, lines, meta: { ...(voucher.meta || {}), inv } };
+}

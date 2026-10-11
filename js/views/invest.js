@@ -5,7 +5,7 @@ import { openModal, toast, confirmBox, amountInput, dateInput, select, field, co
 import { ledgerItems, ledgerCombo, periodControl, currentPeriod, period } from '../ui/pickers.js';
 import * as store from '../app/store.js';
 import { S } from '../app/store.js';
-import { ASSET_TYPES, typeOf, fifo, classify, valueAsset, saleLines, capitalGains, tradingSummary, unlinked, depositState, roundQty, assetTxns } from '../core/invest.js';
+import { ASSET_TYPES, typeOf, fifo, classify, valueAsset, saleLines, capitalGains, tradingSummary, unlinked, depositState, roundQty, assetTxns, unlinkedEntries, sameMoney, linkAsPurchase } from '../core/invest.js';
 import { rulesFor, termOf, FO_AUDIT_TURNOVER } from '../core/taxrules.js';
 import { newVoucher, tidyLines, inferType } from '../core/vouchers.js';
 import { balances } from '../core/books.js';
@@ -19,12 +19,8 @@ const fmtQty = (q, a) => (q == null ? '' : Number(q).toLocaleString('en-IN', { m
 const pct = (g, c) => (c ? (g / c * 100).toFixed(1) + '%' : '');
 const ui = { showClosed: false };
 
-/* accounts money can come from / go to: cash, bank, card and broker cash such as "Zerodha Funds" */
-function payItems(c) {
-  const assetLedgers = new Set(store.assetsOf(c.entity.id).map(a => a.ledgerId));
-  const typical = new Set(Object.values(ASSET_TYPES).map(x => x.ledger));
-  return ledgerItems(c, l => ['cash', 'bank', 'card'].includes(c.natureOf(l)) || (c.natureOf(l) === 'investment' && !assetLedgers.has(l.id) && !typical.has(l.name)));
-}
+/* accounts money can come from / go to: cash, bank, card and broker / wallet balances (e.g. Zerodha wallet) */
+function payItems(c) { return ledgerItems(c, l => ['cash', 'bank', 'card', 'wallet'].includes(c.natureOf(l))); }
 /* the person's chosen default account, else their first bank account in list order */
 const byOrder = (a, b) => (a.order || 0) - (b.order || 0) || a.name.localeCompare(b.name);
 const defaultPay = c => {
@@ -91,11 +87,22 @@ function alerts(root, c, assets, vals) {
   const notes = [];
   const pending = vals.filter(v => v.fifo && v.fifo.pendingCount);
   if (pending.length) notes.push(h('div.note.warn', pending.reduce((s, v) => s + v.fifo.pendingCount, 0) + ' purchase(s) are waiting for the number of units (usually SIP instalments). ', h('a', { href: '#', onclick: ev => { ev.preventDefault(); openPendingUnits(); } }, 'Enter units')));
+  const loose = unlinkedEntries(c, assets);
+  if (loose.length) notes.push(h('div.note.warn', loose.length + ' entr' + (loose.length === 1 ? 'y moved' : 'ies moved') + ' money into or out of an investment account without saying which investment (for example from a bank statement). Link them so nothing is counted twice. ', h('a', { href: '#', onclick: ev => { ev.preventDefault(); openLinkEntries(); } }, 'Link now')));
+  /* a wallet below zero means purchases were paid from it but the money put into it was not recorded */
+  const bal = balances(c);
+  for (const w of c.ledgers.filter(l => !l.archived && c.natureOf(l) === 'wallet')) {
+    const b0 = bal.get(w.id).closing;
+    if (b0 < 0) notes.push(h('div.note.warn', h('b', w.name), ' is ' + money(-b0) + ' below zero: more was bought from it than was put in. Record the money you added to it (Add entry → Move between my accounts, or import the bank statement).'));
+  }
   const stale = staleSales(c);
   if (stale.length) notes.push(h('div.note.warn', stale.length + ' sale(s) need recalculating because an earlier purchase changed. ', h('a', { href: '#', onclick: async ev => { ev.preventDefault(); await recalcSales(stale); } }, 'Recalculate now')));
   for (const v of vals) for (const p of (v.fifo && v.fifo.problems) || []) notes.push(h('div.note.bad', v.asset.name + ': ' + p.text + ' Add the missing purchase or opening holding.'));
-  for (const u of unlinked(c, assets, vals)) {
-    if (!u.books && !u.linked) continue;
+  for (const u0 of unlinked(c, assets, vals)) {
+    /* money already listed above as entries to link is not repeated here */
+    const listed = loose.filter(x => x.ledgerId === u0.ledger.id).reduce((t2, x) => t2 + (x.dir === 'in' ? x.amount : -x.amount), 0);
+    const u = { ...u0, diff: u0.diff - listed };
+    if (!u.diff || (!u.books && !u.linked)) continue;
     notes.push(h('div.note', h('b', ledgerName(u.ledger)), u.diff > 0
       ? ` has ${money(u.diff)} not linked to any investment (for example a starting balance). Use “+ Add investment” for what it holds — past purchases go under “Already own some”, an FD / PPF balance under “Amount already in it” — so gains can be worked out.`
       : ` — investments listed here cost ${money(-u.diff)} more than the account shows. `,
@@ -254,6 +261,8 @@ export function openBuy(assetId = '', existing = null) {
   const pendChk = h('input', { type: 'checkbox', checked: st.pending, onchange: ev => { st.pending = ev.target.checked; qty.disabled = st.pending; refresh(); } });
   qty.disabled = st.pending;
   const prev = h('div.vpreview');
+  const dupBox = h('div');
+  st.linkTo = null;
   const unitLabel = h('span', 'Quantity');
   function sync(src) {
     const q = Number(qty.value) || 0, p = price.paise(), tt = total.paise();
@@ -266,7 +275,9 @@ export function openBuy(assetId = '', existing = null) {
     const a = store.asset(st.assetId);
     if (a) unitLabel.textContent = 'Quantity (' + (typeOf(a).unit || 'units') + ')';
     const cost = total.paise() + charges.paise();
+    drawDup(cost);
     if (!a || !cost) return add(prev, h('span.muted', 'Pick the investment and amount.'));
+    if (st.linkTo) return add(prev, h('span', 'No new money entry: the existing entry of ', h('b', fmtDate(st.linkTo.date)), ' gets these investment details.'));
     add(prev, h('div.ln', h('span', 'From ', h('b', ledgerName(c.lById.get(st.pay)))), h('span.amt', money(cost))), h('div.ln', h('span', '→ Into ', h('b', a.name), ' (', ledgerName(c.lById.get(a.ledgerId)), ')'), h('span.amt', money(cost))),
       !st.pending && Number(qty.value) ? h('div.small.muted', 'Cost per unit incl. charges: ' + money(Math.round(cost / Number(qty.value)))) : null);
   }
@@ -277,10 +288,22 @@ export function openBuy(assetId = '', existing = null) {
       h('div.grid.g4', field(unitLabel, qty), field('Price per unit', price), field('Amount', total), field('Charges', charges, 'brokerage, stamp duty — added to cost')),
       h('div.grid.g4', field('Date', date), h('div.span2', field('Note', note)), h('label.check', { style: { alignSelf: 'end' } }, pendChk, h('span', 'Units not known yet', h('div.small.muted', 'e.g. SIP — fill in later')))),
       h('details', h('summary.small.muted', 'Bought before February 2018?'), field('Value on 31 Jan 2018 (listed shares / equity funds)', fmv, 'Used for the grandfathering rule in long-term gains')),
-      prev),
+      dupBox, prev),
     foot: [h('button.btn', { onclick: () => md.close() }, 'Cancel'), h('button.btn.primary', { onclick: save }, 'Save')]
   });
   refresh();
+  /* the same money may already be in the records (bank statement import, a transfer, the old app) */
+  function drawDup(cost) {
+    clear(dupBox);
+    if (existing || !cost || !isDate(date.value)) { st.linkTo = null; return; }
+    const cands = sameMoney(store.ctxOf(e.id), store.assetsOf(e.id), { amount: cost, date: date.value });
+    if (!cands.length) { st.linkTo = null; return; }
+    if (st.linkTo && !cands.some(x => x.voucher.id === st.linkTo.voucher.id)) st.linkTo = null;
+    add(dupBox, h('div.note.warn', h('b', 'Already recorded? '), 'This money may already be in your records — use it instead of adding a second entry:',
+      ...cands.map(x => h('label.check', { style: { marginTop: '6px' } }, h('input', { type: 'radio', name: 'dup', checked: st.linkTo && st.linkTo.voucher.id === x.voucher.id, onchange: () => { st.linkTo = x; refresh(); } }),
+        h('span', fmtDate(x.date) + ' · ' + money(x.amount) + ' into ' + ledgerName(c.lById.get(x.ledgerId)), h('div.small.muted', x.voucher.narration || '')))),
+      h('label.check', { style: { marginTop: '6px' } }, h('input', { type: 'radio', name: 'dup', checked: !st.linkTo, onchange: () => { st.linkTo = null; refresh(); } }), 'No, this is a separate purchase')));
+  }
   async function save() {
     const a = store.asset(st.assetId);
     if (!a) return toast('Pick the investment');
@@ -289,6 +312,16 @@ export function openBuy(assetId = '', existing = null) {
     const cost = total.paise() + charges.paise();
     if (!cost) return toast('Enter the amount');
     if (!st.pending && !(q > 0)) return toast('Enter the quantity, or tick “Units not known yet”');
+    if (st.linkTo) {
+      try {
+        const linked = linkAsPurchase(st.linkTo.voucher, st.linkTo.ledgerId, a, q);
+        linked.meta.inv.fmv2018 = fmv.paise() || 0;
+        await store.saveVoucher(linked);
+        md.close(); toast('Linked to the existing entry — nothing entered twice');
+        const stale = staleSales(store.ctx()); if (stale.length) await recalcSales(stale, true);
+      } catch (err) { toast(err.message); }
+      return;
+    }
     const draft = { type: 'payment', src: 'investment', date: date.value, narration: note.value.trim() || 'Bought ' + a.name, lines: tidyLines([{ ledgerId: a.ledgerId, dr: cost }, { ledgerId: st.pay, cr: cost }]),
       meta: { inv: { assetId: a.id, action: 'buy', qty: q, cost, price: price.paise(), charges: charges.paise(), fmv2018: fmv.paise() || 0 } } };
     draft.type = inferType(c, draft.lines);
@@ -400,6 +433,54 @@ async function recalcSales(list, quiet = false) {
     try { await store.saveVoucher({ ...v, lines }); n++; } catch (err) { toast(err.message); return; }
   }
   if (!quiet || n) toast(n + ' sale(s) recalculated');
+}
+
+/* Link entries that moved money into / out of an investment account to the actual investment */
+function openLinkEntries() {
+  const e = store.activeEntity();
+  const c = store.ctxOf(e.id);
+  const list = unlinkedEntries(c, store.assetsOf(e.id));
+  const rows = list.map(u => ({ u, assetId: '', qty: h('input.inp.sm', { type: 'number', step: 'any', min: 0, placeholder: 'quantity', style: { width: '110px' } }) }));
+  const tb = h('tbody', rows.map(r => h('tr', h('td.nowrap', fmtDate(r.u.date)), h('td', r.u.voucher.narration || '—', h('div.narr', ledgerName(c.lById.get(r.u.ledgerId)))),
+    h('td.r', amt(r.u.dir === 'in' ? -r.u.amount : r.u.amount, { flow: true }), h('div.narr', r.u.dir === 'in' ? 'bought / put in' : 'sold / taken out')),
+    h('td', { style: { minWidth: '220px' } }, assetCombo(e.id, '', id => { r.assetId = id; }, () => true)), h('td', r.qty))));
+  const md = openModal({
+    title: 'Link to investments', sub: 'Each entry keeps its money side; it just gets told which investment it was. Quantity is needed for shares, funds, gold and crypto (leave blank for SIP units you will add later).', size: 'xwide',
+    body: h('div.tbl-wrap', { style: { maxHeight: '60vh', overflowY: 'auto' } }, h('table.tbl', h('thead', h('tr', h('th', 'Date'), h('th', 'Entry'), h('th.r', 'Amount'), h('th', 'Which investment'), h('th', 'Quantity'))), tb)),
+    foot: [h('button.btn', { onclick: () => md.close() }, 'Close'), h('button.btn.primary', { onclick: async () => {
+      let n = 0;
+      for (const r of rows) {
+        const a = store.asset(r.assetId); if (!a) continue;
+        const q = Number(r.qty.value) || 0;
+        const v = store.voucher(r.u.voucher.id); if (!v) continue;
+        try {
+          if (r.u.dir === 'in') await store.saveVoucher(linkAsPurchase(v, r.u.ledgerId, a, q));
+          else await linkAsSale(v, r.u, a, q);
+          n++;
+        } catch (err) { toast(err.message); return; }
+      }
+      md.close(); toast(n ? n + ' linked' : 'Pick an investment for at least one entry');
+      const stale = staleSales(store.ctx()); if (stale.length) await recalcSales(stale, true);
+    } }, 'Link')]
+  });
+}
+/* an entry that took money out of an investment account becomes a sale (FIFO cost and profit) or withdrawal */
+async function linkAsSale(v, u, a, qty) {
+  const c = store.ctxOf(v.entityId);
+  const moneyLine = v.lines.find(l => l.dr && l.ledgerId !== u.ledgerId) || v.lines.find(l => l.dr);
+  if (!typeOf(a).units) {
+    const d = depositState(a, c.vouchers);
+    const cost = Math.min(u.amount, d.book);
+    const lines = v.lines.map(l => (l.ledgerId === u.ledgerId ? { ...l, ledgerId: a.ledgerId } : l));
+    return store.saveVoucher({ ...v, lines, meta: { ...(v.meta || {}), inv: { assetId: a.id, action: 'withdraw', amount: u.amount, cost, linked: true } } });
+  }
+  if (!(qty > 0)) throw new Error('Enter the quantity sold for ' + a.name);
+  const r = saleLines({ asset: a, vouchers: c.vouchers, sellRef: v.id, date: v.date, qty, proceeds: u.amount, moneyLedgerId: moneyLine.ledgerId, investLedgerId: a.ledgerId, gainLedgerFor: k => k });
+  if (r.problem) throw new Error(a.name + ': ' + r.problem);
+  const ids = {};
+  for (const l of r.lines) if (!c.lById.has(l.ledgerId)) ids[l.ledgerId] = (await store.ensureGainLedger(v.entityId, l.ledgerId)).id;
+  const lines = tidyLines(r.lines.map(l => (ids[l.ledgerId] ? { ...l, ledgerId: ids[l.ledgerId] } : l)));
+  return store.saveVoucher({ ...v, lines, meta: { ...(v.meta || {}), inv: { assetId: a.id, action: 'sell', qty, proceeds: u.amount, gross: u.amount, charges: 0, price: Math.round(u.amount / qty), linked: true } } });
 }
 
 /* SIP instalments saved without units */

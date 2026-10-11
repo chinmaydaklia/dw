@@ -18,6 +18,7 @@ export const ROOT_ORDER = ['asset', 'liability', 'capital', 'income', 'expense']
 export const GROUP_TEMPLATE = [
   { key: 'bank', name: 'Bank accounts', caName: 'Bank Accounts', root: 'asset', nature: 'bank' },
   { key: 'cash', name: 'Cash', caName: 'Cash-in-Hand', root: 'asset', nature: 'cash' },
+  { key: 'wallets', name: 'Broker & wallet money', caName: 'Balances with Brokers / Wallets', root: 'asset', nature: 'wallet' },
   { key: 'invest', name: 'Investments', caName: 'Investments', root: 'asset', nature: 'investment' },
   { key: 'advances', name: 'Money lent to others', caName: 'Loans & Advances (Asset)', root: 'asset', nature: 'advance' },
   { key: 'taxassets', name: 'Tax paid & TDS', caName: 'Taxes Paid & TDS', root: 'asset', nature: 'taxasset' },
@@ -54,8 +55,12 @@ export const GAIN_LEDGERS = {
   inv_income: { name: 'Interest – PPF / NPS / other investments', caName: 'Interest on investments', tag: 'interest' }
 };
 export const OLD_LEDGER_NAMES = { 'Sundry Payables': 'Bills to pay' };
-export const MONEY_NATURES = new Set(['bank', 'cash']);
-export const PAYMENT_NATURES = new Set(['bank', 'cash', 'card']);
+/* money you can spend or move: broker / wallet balances count, so bank → Zerodha wallet is a transfer, not an investment */
+export const MONEY_NATURES = new Set(['bank', 'cash', 'wallet']);
+export const PAYMENT_NATURES = new Set(['bank', 'cash', 'card', 'wallet']);
+/* bank-statement words that mean money went to a broker / wallet (transfer) or straight into a mutual fund (investment) */
+export const BROKER_WORDS = [[/zerodha|\bkite\b/i, 'zerodha'], [/coindcx/i, 'coindcx'], [/groww/i, 'groww'], [/upstox|rksv/i, 'upstox'], [/angel\s*(one|broking)/i, 'angel']];
+export const MF_WORDS = /\b(bse ?(ltd|star)|iccl|nse clearing|indian clearing|cams|kfin|karvy|mutual fund|mf sip|sip\b|amc\b|bsestarmf)/i;
 
 /* Stable tax keys. Section references live in SECTION_REFS by tax year, so a renumbering
    (Income-tax Act, 2025) never touches stored data. */
@@ -103,10 +108,11 @@ const SELF = [
   ['bank', 'Bank of India', { alias: 'boi' }],
   ['bank', 'Kotak Savings', { alias: 'kotak' }],
   ['cash', 'Cash in Hand', { alias: 'cash' }],
-  ['invest', 'Zerodha Funds (Kite)', { alias: 'kite zerodha' }],
+  ['wallets', 'Zerodha wallet (Kite funds)', { alias: 'kite zerodha wallet', broker: 'zerodha' }],
+  ['wallets', 'CoinDCX wallet (INR)', { alias: 'coindcx wallet', broker: 'coindcx' }],
   ['invest', 'Stocks', {}],
   ['invest', 'Mutual Funds', { alias: 'mf sip' }],
-  ['invest', 'Crypto (CoinDCX)', { alias: 'coindcx crypto' }],
+  ['invest', 'Crypto (CoinDCX)', { alias: 'crypto btc' }],
   ['invest', 'Gold', {}],
   ['invest', 'Fixed Deposits', { alias: 'fd' }],
   ['invest', 'PPF', { taxTag: 'ded_80c' }],
@@ -169,7 +175,7 @@ const SPOUSE = [
   ['bank', 'IDFC FIRST Savings', { alias: 'idfc' }],
   ['bank', 'ICICI Savings', { alias: 'icici' }],
   ['cash', 'Cash in Hand', { alias: 'cash' }],
-  ['invest', 'Zerodha Funds (Kite)', { alias: 'kite zerodha' }],
+  ['wallets', 'Zerodha wallet (Kite funds)', { alias: 'kite zerodha wallet', broker: 'zerodha' }],
   ['invest', 'Stocks', {}],
   ['invest', 'Mutual Funds', { alias: 'mf sip' }],
   ['invest', 'Gold', {}],
@@ -216,7 +222,7 @@ export function seedMasters(entity, template = entity.template || 'self') {
   const siteId = n => (entity.sites.find(s => s.name === n) || {}).id || '';
   const ledgers = (TEMPLATES[template] || SELF).map(([gk, name, o], i) => makeLedger({
     entityId: entity.id, groupId: byKey[gk].id, name, alias: o.alias || '', taxTag: o.taxTag || defaultTag(byKey[gk]),
-    siteId: o.site ? siteId(o.site) : '', tdsBps: o.tdsBps || 0, system: o.system || '', note: o.note || '', order: i
+    siteId: o.site ? siteId(o.site) : '', tdsBps: o.tdsBps || 0, system: o.system || '', note: o.note || '', broker: o.broker || '', order: i
   }));
   return { groups, ledgers };
 }
@@ -233,7 +239,7 @@ export function makeLedger(p) {
   return {
     id: uid('led'), entityId: p.entityId, groupId: p.groupId, name: p.name, alias: p.alias || '',
     opening: p.opening || 0, taxTag: p.taxTag || 'none', siteId: p.siteId || '', tdsBps: p.tdsBps || 0,
-    system: p.system || '', interEntityWith: p.interEntityWith || '', archived: false, note: p.note || '',
+    system: p.system || '', interEntityWith: p.interEntityWith || '', broker: p.broker || '', archived: false, note: p.note || '',
     order: p.order || 0, createdAt: nowISO(), updatedAt: nowISO()
   };
 }

@@ -170,8 +170,8 @@ function fam(out, p, exp) {
   const ctxs = ents.map(e => store.ctxOf(e.id));
   const asOf = asOfOf(p);
   const f = family(ctxs, { asOf, from: p.from });
-  const cols = ['cash', 'bank', 'investments', 'otherAssets', 'loans', 'cards', 'otherLiab', 'netWorth', 'income', 'expense', 'surplus'];
-  const lbl = { cash: 'Cash', bank: 'Bank', investments: 'Investments', otherAssets: 'Other things I own', loans: 'Loans', cards: 'Credit cards', otherLiab: 'Other dues', netWorth: 'Net worth', income: 'Income', expense: 'Spending', surplus: 'Saved' };
+  const cols = ['cash', 'bank', 'wallets', 'investments', 'otherAssets', 'loans', 'cards', 'otherLiab', 'netWorth', 'income', 'expense', 'surplus'];
+  const lbl = { cash: 'Cash', bank: 'Bank', wallets: 'Broker & wallets', investments: 'Investments', otherAssets: 'Other things I own', loans: 'Loans', cards: 'Credit cards', otherLiab: 'Other dues', netWorth: 'Net worth', income: 'Income', expense: 'Spending', surplus: 'Saved' };
   add(out, h('div.kpis', h('div.card.kpi', h('div.lbl', 'Family net worth'), h('div.val', amt(f.total.netWorth)), h('div.foot', 'as at ' + fmtDate(asOf))),
     h('div.card.kpi', h('div.lbl', 'Family income · ' + p.label), h('div.val', amt(f.total.income))),
     h('div.card.kpi', h('div.lbl', 'Family spending'), h('div.val', amt(f.total.expense))),

@@ -57,6 +57,20 @@ Investments are ordinary entries (buy, sell, dividend, deposit, withdrawal) that
 - **F&O / intraday:** a result per day or per month, with charges, STT and option premium. Turnover is |profit| + |loss| + premium received, with an audit-limit flag. F&O counts as business income and intraday as speculative.
 - **CA pack:** adds Capital gains (FIFO lines with ISIN and dates), Holdings and F&O sheets.
 
+### Money into investments — counted once
+
+- **Broker & wallet money** (Zerodha wallet, CoinDCX INR wallet) is a money account, like a bank account.
+  - **Bank → wallet** is a transfer: nothing is invested yet, and net worth does not change.
+  - **Wallet → shares / funds**, or **bank → shares / funds directly**, is a Buy. That is the only investment entry.
+- **Statement import** recognises Zerodha / CoinDCX / Groww / Upstox transfers ("to wallet") and mutual-fund payments (BSE / ICCL / CAMS / KFin / MF SIP), so they are not booked as spending.
+- **Linking instead of re-entering:**
+  - **Buy** spots money already recorded (same amount within 5 days, for example from a statement import) and offers to link that entry.
+  - **Portfolio** lists every payment into or out of an investment account that is not linked yet, with **Link now**. Linking a payment out of an account works it out as a sale with FIFO profit.
+  - Linking adds the investment details to the existing entry; it never adds a second one.
+- **Zerodha holdings import** asks whether new shares were owned before you started (starting balance) or bought recently with wallet / bank money (recorded as purchases).
+- **Portfolio warns** when a wallet goes below zero, meaning money put into it is missing.
+- **Upgrading** (data schema v4) moves existing Zerodha / wallet accounts into the new section. The old app's "investment" accounts (Kite Wallet, CoinDCX) also migrate as wallets.
+
 **Detailed income / spending:** alongside quick entry, "Detailed income" and "Detailed expense" record more:
 - who paid or was paid, and how (cash / UPI / card / bank transfer / cheque)
 - reference number and bill / receipt number

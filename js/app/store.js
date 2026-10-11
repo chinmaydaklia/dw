@@ -1,15 +1,15 @@
 /* In-memory state backed by IndexedDB. All writes go through here so audit, numbering, validation,
    locking and persistence are applied in one place. */
 import * as DB from './db.js';
-import { makeEntity, seedMasters, makeLedger, GROUP_TEMPLATE, OLD_GROUP_NAMES, SYSTEM_NAMES, OLD_LEDGER_NAMES, GAIN_LEDGERS } from '../core/masters.js';
+import { makeEntity, seedMasters, makeLedger, makeGroup, GROUP_TEMPLATE, OLD_GROUP_NAMES, SYSTEM_NAMES, OLD_LEDGER_NAMES, GAIN_LEDGERS } from '../core/masters.js';
 import { makeCtx } from '../core/books.js';
 import { validateVoucher, nextNumber, newVoucher } from '../core/vouchers.js';
 import { buildDemo } from '../core/demo.js';
 import { uid, nowISO, clone } from '../lib/util.js';
 import { today, fyOf } from '../lib/dates.js';
 
-export const APP_VERSION = '1.2.0';
-export const SCHEMA_VERSION = 3;
+export const APP_VERSION = '1.3.0';
+export const SCHEMA_VERSION = 4;
 const COLLS = ['entities', 'groups', 'ledgers', 'vouchers', 'rules', 'recurring', 'shortcuts', 'batches', 'holdings', 'taxpnl', 'assets'];
 
 export const S = {
@@ -40,7 +40,30 @@ const MIGRATIONS = {
     await DB.write(ops);
   },
   /* v2 -> v3: investments (Phase 2). The new "assets" store is created by the IndexedDB upgrade; nothing to convert. */
-  2: async () => {}
+  2: async () => {},
+  /* v3 -> v4: broker / wallet balances become money accounts (bank → wallet is a transfer, not an investment) */
+  3: async () => {
+    const ops = [];
+    const tpl = GROUP_TEMPLATE.find(g => g.key === 'wallets');
+    for (const e of S.entities) {
+      let g = S.groups.find(x => x.entityId === e.id && x.key === 'wallets');
+      if (!g) {
+        g = makeGroup({ entityId: e.id, key: 'wallets', name: tpl.name, root: 'asset', nature: 'wallet', order: 1.5 });
+        g.system = true;
+        S.groups.push(g); ops.push({ store: 'groups', put: g });
+      }
+      const invest = new Set(S.groups.filter(x => x.entityId === e.id && x.nature === 'investment').map(x => x.id));
+      const assetLedgers = new Set(S.assets.filter(a => a.entityId === e.id).map(a => a.ledgerId));
+      for (const l of S.ledgers.filter(x => x.entityId === e.id && invest.has(x.groupId) && !assetLedgers.has(x.id))) {
+        if (!/zerodha funds|kite|wallet|broker/i.test(l.name)) continue;
+        l.groupId = g.id;
+        if (/zerodha|kite/i.test(l.name)) { l.broker = 'zerodha'; if (l.name === 'Zerodha Funds (Kite)') l.name = 'Zerodha wallet (Kite funds)'; }
+        else if (/coindcx/i.test(l.name)) l.broker = 'coindcx';
+        ops.push({ store: 'ledgers', put: l });
+      }
+    }
+    await DB.write(ops);
+  }
 };
 
 export async function init() {

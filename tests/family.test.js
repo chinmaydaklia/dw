@@ -4,7 +4,7 @@ import { makeEntity, seedMasters, GROUP_TEMPLATE, OLD_GROUP_NAMES, SYSTEM_NAMES 
 import { makeCtx, balances, trialBalance, profitLoss, family } from '../js/core/books.js';
 
 test('plain names exist for every built-in section, with formal names kept for the CA', () => {
-  for (const g of GROUP_TEMPLATE) { assert.ok(g.name && g.caName, g.key); if (g.key !== 'invest') assert.ok(OLD_GROUP_NAMES[g.key], g.key); }
+  for (const g of GROUP_TEMPLATE) { assert.ok(g.name && g.caName, g.key); if (!['invest', 'wallets'].includes(g.key)) assert.ok(OLD_GROUP_NAMES[g.key], g.key); /* invest kept its name; wallets is new in v1.3 */ }
   const e = makeEntity({ name: 'You' });
   const { ledgers } = seedMasters(e);
   const names = ledgers.map(l => l.name);

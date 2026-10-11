@@ -160,7 +160,7 @@ export function openEntry(kind, preset = {}) {
       const s = { from: preset.fromLedgerId || '', to: preset.toLedgerId || '' };
       const a = amountInput(preset.amount, { oninput: refresh });
       add(body, h('div.grid.g3', field('From', ledgerCombo(c, 'all', s.from, id => { s.from = id; refresh(); })), field('To', ledgerCombo(c, 'all', s.to, id => { s.to = id; refresh(); })), field('Amount', a)),
-        h('p.small.muted', 'Your own money moving: bank to cash, paying the credit-card bill, opening an FD, paying advance tax, adding money to Zerodha. For money with your spouse use “Give / get money from family”.'));
+        h('p.small.muted', 'Your own money moving: bank to cash, paying the credit-card bill, paying advance tax, adding money to your Zerodha wallet. Buying shares or funds is recorded under Investments → Buy (from the bank or the wallet). For money with your spouse use “Give / get money from family”.'));
       build = () => (s.from && s.to && a.paise() && s.from !== s.to ? buildTransfer(c, { date: st.date, fromLedgerId: s.from, toLedgerId: s.to, amount: a.paise(), narration: st.narration, tags: tags() }) : null);
     },
     loan() {

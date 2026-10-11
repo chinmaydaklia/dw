@@ -15,6 +15,8 @@ import { fmtDate, today, fyOf, fyList } from '../lib/dates.js';
 import { uid, nowISO, normNarr } from '../lib/util.js';
 import { toPaise } from '../lib/money.js';
 import { valueAsset } from '../core/invest.js';
+import { newVoucher } from '../core/vouchers.js';
+import { BROKER_WORDS, MF_WORDS } from '../core/masters.js';
 
 export function renderImport(root) {
   const e = store.activeEntity();
@@ -116,7 +118,15 @@ function reviewStatement(args, res) {
   const L = c.lById.get(args.ledgerId);
   const suspense = c.ledgers.find(l => l.system === 'suspense');
   const rules = S.rules.filter(r => r.entityId === entity.id && !r.off);
-  const rows = planRows(c, args.ledgerId, res, rules, suspense ? suspense.id : '');
+  /* broker / wallet transfers and mutual-fund payments are recognised so they are not booked as spending */
+  const brokerLedger = key => c.ledgers.find(l => !l.archived && l.broker === key && c.natureOf(l) === 'wallet');
+  const mfLedger = c.ledgers.find(l => !l.archived && l.name === 'Mutual Funds');
+  const autoMap = (narr, dir) => {
+    for (const [re, key] of BROKER_WORDS) if (re.test(narr)) { const w = brokerLedger(key); if (w) return { ledgerId: w.id, hint: 'wallet' }; }
+    if (dir === 'debit' && MF_WORDS.test(narr) && mfLedger) return { ledgerId: mfLedger.id, hint: 'invest' };
+    return null;
+  };
+  const rows = planRows(c, args.ledgerId, res, rules, suspense ? suspense.id : '', autoMap);
   const items = ledgerItems(c, l => l.id !== args.ledgerId);
   const before = ledgerStatement(c, args.ledgerId, { to: res.to }).closing;
   const adj = { on: false, amount: 0 };
@@ -157,6 +167,8 @@ function reviewStatement(args, res) {
     const flags = [];
     if (r.check === 'guess' || r.check === 'mismatch') flags.push(h('span.pill.warn', { title: 'Not sure if money came in or went out' }, '⚠'));
     if (r.rule) flags.push(h('span.pill.gold', { title: 'Matched rule' }, '★ ' + r.rule));
+    if (r.hint === 'wallet') flags.push(h('span.pill', { title: 'Moving your own money to a broker / wallet — not spending, not yet an investment' }, '⇄ to wallet'));
+    if (r.hint === 'invest') flags.push(h('span.pill', { title: 'Looks like a mutual fund purchase — link it to the fund in Portfolio afterwards (no second entry needed)' }, '◆ investment'));
     if (r.dup) flags.push(h('span.pill.warn', { title: r.dup.voucher ? 'Already recorded on ' + fmtDate(r.dup.voucher.date) : 'Same as row #' + r.dup.row }, '⧉ duplicate'));
     else if (r.soft) flags.push(h('span.pill.warn', { title: 'A similar entry already exists on ' + fmtDate(r.soft.voucher.date) + ' ' + (r.soft.voucher.narration || '') }, '≈ possible duplicate'));
     const flip = h('button.btn.ghost.sm', { title: 'Flip money in / out', onclick: () => { r.dir = r.dir === 'debit' ? 'credit' : 'debit'; r.check = 'flipped'; draw(); } }, '⇅');
@@ -395,32 +407,54 @@ export async function importHoldings() {
   });
   const toAdd = plan.filter(p => p.action !== 'price').length;
   const since = dateInput('');
+  /* new shares: owned before using the app (starting balance) or bought recently with wallet / bank money (purchases) */
+  const how = { mode: 'before', pay: (c.ledgers.find(l => !l.archived && l.broker === 'zerodha' && c.natureOf(l) === 'wallet') || {}).id || '' };
+  const payBox = h('div');
+  const drawHow = () => { clear(payBox); if (how.mode === 'paid') add(payBox, field('Paid from', combo(ledgerItems(c, l => ['bank', 'wallet', 'cash'].includes(c.natureOf(l))), how.pay, id => { how.pay = id; }))); };
+  const howBox = h('div.grid', { style: { marginTop: '10px' } },
+    h('label.check', h('input', { type: 'radio', name: 'hhow', checked: true, onchange: () => { how.mode = 'before'; drawHow(); } }), h('span', h('b', 'Owned before I started using this app'), h('div.small.muted', 'Added at Zerodha’s average cost as part of the starting balance — no money moves.'))),
+    h('label.check', h('input', { type: 'radio', name: 'hhow', onchange: () => { how.mode = 'paid'; drawHow(); } }), h('span', h('b', 'Bought recently with money from my Zerodha wallet / bank'), h('div.small.muted', 'Recorded as purchases, so the wallet goes down by the same amount — counted once.'))),
+    payBox);
   const md = openModal({
     title: 'Review holdings', sub: f.name + ' · ' + res.items.length + ' holdings · cost ' + money(res.cost) + ' · value ' + money(res.value), size: 'wide',
     body: h('div',
       h('div.tbl-wrap', { style: { maxHeight: '45vh', overflowY: 'auto' } }, h('table.tbl', h('thead', h('tr', h('th', 'Symbol'), h('th.r', 'Qty'), h('th.r', 'Avg'), h('th.r', 'Price'), h('th.r', 'Cost'), h('th', 'In Portfolio'))),
         h('tbody', plan.map(p => h('tr', h('td', p.x.symbol, p.x.isin ? h('div.narr', p.x.isin) : null), h('td.r', String(p.x.qty)), h('td.r.amt', money(p.x.avg)), h('td.r.amt', money(p.x.ltp)), h('td.r.amt', money(p.x.cost)),
           h('td', p.action === 'price' ? h('span.pill.ok', 'price updated' + (Math.abs(p.held - p.x.qty) > 1e-9 ? ' · you hold ' + p.held + ' here' : '')) : p.action === 'create' ? h('span.pill.gold', 'will be added') : h('span.pill.gold', 'holding will be added'))))))),
+      toAdd ? howBox : null,
       toAdd ? h('div.grid.g2', { style: { marginTop: '10px' } }, field('Bought on (approximate) for the ones being added', since, 'The date decides short or long term. You can correct each one later in Portfolio.')) : null,
       h('p.small.muted', 'Shares you already track only get today’s price. New ones are added as “already owned” at Zerodha’s average cost — part of the Stocks account’s starting balance, no money moves.')),
     foot: [h('button.btn', { onclick: () => md.close() }, 'Cancel'), h('button.btn.primary', { onclick: async () => {
       if (toAdd && !since.value) return toast('Enter the approximate purchase date');
-      const ops = [];
+      if (toAdd && how.mode === 'paid' && !how.pay) return toast('Choose where the money came from');
+      const ops = [], buys = [];
+      const lotOrBuy = (assetId, x) => {
+        if (how.mode === 'before') return [{ id: uid('lot'), date: since.value, qty: x.qty, cost: x.cost, fmv2018: 0 }];
+        buys.push({ assetId, x });
+        return [];
+      };
       const stocks = await store.ensureLedgerNamed(e.id, 'invest', 'Stocks');
       for (const p of plan) {
         const etf = /BEES$|ETF$/i.test(p.x.symbol);
         if (p.action === 'create') {
-          ops.push({ store: 'assets', put: { id: uid('ast'), entityId: e.id, name: p.x.symbol, type: etf ? 'etf' : 'equity', symbol: p.x.symbol.toUpperCase(), isin: p.x.isin || '', ledgerId: stocks.id, price: p.x.ltp, priceDate: today(), priceSource: 'zerodha',
-            openingLots: [{ id: uid('lot'), date: since.value, qty: p.x.qty, cost: p.x.cost, fmv2018: 0 }], events: [], archived: false, createdAt: nowISO(), updatedAt: nowISO() } });
+          const id = uid('ast');
+          ops.push({ store: 'assets', put: { id, entityId: e.id, name: p.x.symbol, type: etf ? 'etf' : 'equity', symbol: p.x.symbol.toUpperCase(), isin: p.x.isin || '', ledgerId: stocks.id, price: p.x.ltp, priceDate: today(), priceSource: 'zerodha',
+            openingLots: lotOrBuy(id, p.x), events: [], archived: false, createdAt: nowISO(), updatedAt: nowISO() } });
         } else if (p.action === 'lots') {
-          ops.push({ store: 'assets', put: { ...p.a, price: p.x.ltp || p.a.price, priceDate: today(), openingLots: [...(p.a.openingLots || []), { id: uid('lot'), date: since.value, qty: p.x.qty, cost: p.x.cost, fmv2018: 0 }], updatedAt: nowISO() } });
+          ops.push({ store: 'assets', put: { ...p.a, price: p.x.ltp || p.a.price, priceDate: today(), openingLots: [...(p.a.openingLots || []), ...lotOrBuy(p.a.id, p.x)], updatedAt: nowISO() } });
         } else if (p.x.ltp) ops.push({ store: 'assets', put: { ...p.a, price: p.x.ltp, priceDate: today(), priceSource: 'zerodha', updatedAt: nowISO() } });
       }
       const old = S.holdings.filter(x => x.entityId === e.id && x.source === 'zerodha');
       ops.push(...old.map(x => ({ store: 'holdings', del: x.id })));
       for (const x of res.items) ops.push({ store: 'holdings', put: { id: uid('hld'), entityId: e.id, ledgerId: stocks.id, name: x.symbol, isin: x.isin, type: 'Stocks', qty: x.qty, avg: x.avg, ltp: x.ltp, cost: x.cost, value: x.value, broker: 'Zerodha', source: 'zerodha', asOf: today(), createdAt: nowISO() } });
-      await store.commit(ops); md.close();
-      toast(toAdd ? toAdd + ' added to Portfolio, prices updated' : 'Prices updated');
+      await store.commit(ops);
+      if (buys.length) {
+        const vs = buys.map(b => newVoucher(e.id, { type: 'payment', src: 'investment', date: since.value, narration: 'Bought ' + b.x.symbol + ' (from holdings import)',
+          lines: [{ ledgerId: stocks.id, dr: b.x.cost, cr: 0 }, { ledgerId: how.pay, dr: 0, cr: b.x.cost }], meta: { inv: { assetId: b.assetId, action: 'buy', qty: b.x.qty, cost: b.x.cost, price: b.x.avg, charges: 0 } } }));
+        try { await store.saveVouchers(vs); } catch (err) { toast(err.message); return; }
+      }
+      md.close();
+      toast(toAdd ? toAdd + ' added to Portfolio' + (buys.length ? ' as purchases' : '') + ', prices updated' : 'Prices updated');
       location.hash = '#/portfolio';
     } }, toAdd ? 'Add to Portfolio' : 'Update prices')]
   });
