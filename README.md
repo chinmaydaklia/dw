@@ -71,6 +71,24 @@ Investments are ordinary entries (buy, sell, dividend, deposit, withdrawal) that
 - **Portfolio warns** when a wallet goes below zero, meaning money put into it is missing.
 - **Upgrading** (data schema v4) moves existing Zerodha / wallet accounts into the new section. The old app's "investment" accounts (Kite Wallet, CoinDCX) also migrate as wallets.
 
+### Zerodha P&L import
+
+Import → **Zerodha P&L** reads either file from Zerodha Console.
+
+**Tax P&L** (`taxpnl-….xlsx`, with its "Tradewise Exits" sheet) — recommended, because it has buy and sell dates:
+- Each share / fund exit becomes a sale in Portfolio, with FIFO cost and the profit split short / long term.
+  - If Portfolio already holds the shares, only the sale is added, using your own purchases.
+  - Otherwise the purchase is added too, paid from the Zerodha wallet.
+  - You can switch each row between the two in the review screen.
+- Brokerage and exchange charges reduce the sale value. STT on share sales is recorded separately, because it is not deductible against capital gains.
+- F&O and intraday trades become one trading result per day per segment, with charges, STT and Zerodha's turnover.
+- The yearly summary (gains, F&O, dividends) can be saved for the tax phase at the same time.
+- Re-importing the same file flags every row as already imported.
+
+**Console P&L** (no dates): F&O / intraday totals are added as one trading result. For shares, the Tax P&L file is needed because short / long term depends on dates.
+
+Every Zerodha P&L import goes through review first and can be undone from Import history; undoing also removes any investments it created.
+
 **Detailed income / spending:** alongside quick entry, "Detailed income" and "Detailed expense" record more:
 - who paid or was paid, and how (cash / UPI / card / bank transfer / cheque)
 - reference number and bill / receipt number

@@ -7,15 +7,17 @@ import * as store from '../app/store.js';
 import { S } from '../app/store.js';
 import { parseCSV, parseTableStatement, groupPdfItems, parsePdfStatement, BANK_NAMES } from '../import/statement-parse.js';
 import { planRows, rowToVoucher, makeBatch, ruleMatch, suggestKeyword } from '../import/statement-plan.js';
-import { parseTaxPnl, parseHoldings } from '../import/zerodha.js';
+import { parseTaxPnl, parseHoldings, parseTradewise, parseConsolePnl } from '../import/zerodha.js';
+import { planZerodhaPnl, buildZerodhaPostings } from '../import/zerodha-plan.js';
+import { ASSET_TYPES } from '../core/invest.js';
 import { readWorkbook, readPdfItems } from '../import/libs.js';
 import { balances, ledgerStatement, makeCtx } from '../core/books.js';
 import { LEGACY_KEY, looksLegacy, buildLegacyPlan, suggestMapping, normalizeLegacy, ownerOfAccount } from '../core/legacy.js';
-import { fmtDate, today, fyOf, fyList } from '../lib/dates.js';
+import { fmtDate, today, fyOf, fyList, fyRange, parseDateAny } from '../lib/dates.js';
 import { uid, nowISO, normNarr } from '../lib/util.js';
 import { toPaise } from '../lib/money.js';
 import { valueAsset } from '../core/invest.js';
-import { newVoucher } from '../core/vouchers.js';
+import { newVoucher, tidyLines } from '../core/vouchers.js';
 import { BROKER_WORDS, MF_WORDS } from '../core/masters.js';
 
 export function renderImport(root) {
@@ -25,7 +27,7 @@ export function renderImport(root) {
     h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(220px,1fr))', gap: '12px' } },
       tile('🏦', 'Bank statement', 'PDF (password OK), CSV, XLS, XLSX · SBI, BoB, HDFC, IDFC tuned + generic columns', () => importStatement()),
       tile('⇪', 'Old DoctorWealth data', 'Bring across accounts, income, expenses, loans and investments — every balance is checked', () => importLegacy()),
-      tile('📈', 'Zerodha tax P&L', 'taxpnl-….xlsx — realised gains, F&O and dividends per financial year', () => importTaxPnl()),
+      tile('📈', 'Zerodha P&L', 'Tax P&L (taxpnl-….xlsx) or Console P&L — adds your sales, profits and F&O results', () => importZerodhaPnl()),
       tile('📊', 'Zerodha holdings', 'Kite holdings Excel — adds shares to Portfolio and updates prices', () => importHoldings()),
       tile('↺', 'Restore backup', 'A backup file from this app (replaces everything)', () => restoreBackup())));
   add(root, h('div.section-h', h('h2', 'Rules'), h('span.muted.small', 'a word in the bank description → category (you still check every row)'), h('span.spacer'), h('button.btn.sm', { onclick: () => editRule(null) }, '+ Rule')));
@@ -54,6 +56,7 @@ export function renderImport(root) {
 function batchLabel(b) {
   if (b.kind === 'statement') return 'Bank statement → ' + ((store.ledger(b.ledgerId) || {}).name || '?') + ' · ' + (BANK_NAMES[b.bank] || b.bank || '') + (b.from ? ' · ' + fmtDate(b.from) + ' – ' + fmtDate(b.to) : '');
   if (b.kind === 'legacy') return 'Old DoctorWealth data';
+  if (b.kind === 'zerodha_pnl') return 'Zerodha P&L · ' + (b.count || 0) + ' entries';
   return b.kind;
 }
 
@@ -252,6 +255,10 @@ export async function undoBatch(b) {
     for (const c of ['holdings', 'taxpnl', 'rules']) for (const r of S[c].filter(x => x.batchId === b.id)) ops.push({ store: c, del: r.id });
     if (b.sitesAdded && b.sitesAdded.length) { const me = store.entityById(b.meEntityId); if (me) ops.push({ store: 'entities', put: { ...me, sites: me.sites.filter(s => !b.sitesAdded.includes(s.id)) } }); }
   }
+  if (b.kind === 'zerodha_pnl') {
+    const remaining = S.vouchers.filter(v => v.batchId !== b.id);
+    for (const id of b.assetIds || []) if (!remaining.some(v => v.meta && v.meta.inv && v.meta.inv.assetId === id)) ops.push({ store: 'assets', del: id });
+  }
   ops.push({ store: 'batches', del: b.id });
   await store.commit(ops);
   toast('Import undone · ' + vs.length + ' removed');
@@ -364,12 +371,135 @@ function legacyReview(raw, source) {
   }
 }
 
+/* ================= Zerodha P&L → entries ================= */
+const SEG_NAME = { intraday: 'Intraday shares', futures: 'F&O – futures', options: 'F&O – options' };
+const KIND_NAME = { short: 'Short term', long: 'Long term', buyback: 'Buyback', nonequity: 'Non-equity ETF', mf: 'Mutual fund' };
+export async function importZerodhaPnl() {
+  const f = await pickFile('.xlsx,.xls,.csv'); if (!f) return;
+  let sheets;
+  try { sheets = /\.csv$/i.test(f.name) ? { Sheet1: parseCSV(await f.text()) } : await readWorkbook(await f.arrayBuffer()); }
+  catch (e) { return toast('Could not read the file: ' + e.message); }
+  const summary = parseTaxPnl(sheets, f.name, S.settings.fy);
+  const trades = parseTradewise(sheets, parseDateAny);
+  if (!trades.error) return reviewZerodhaPnl(f, trades.rows, summary.error ? null : summary);
+  const con = parseConsolePnl(sheets, f.name);
+  if (!con.error) return reviewConsolePnl(f, con);
+  if (!summary.error) return editTaxSummary(f, summary);
+  openModal({ title: 'Not imported', body: h('div.note.warn', 'This does not look like a Zerodha P&L file. In Console use Reports → Tax P&L (download Excel) — it has the “Tradewise Exits” sheet with dates — or Reports → P&L.') });
+}
+async function zerodhaWallet(e) {
+  const c = store.ctxOf(e.id);
+  const w = c.ledgers.find(l => !l.archived && l.broker === 'zerodha' && c.natureOf(l) === 'wallet');
+  return w || store.ensureLedgerNamed(e.id, 'wallets', 'Zerodha wallet (Kite funds)', { broker: 'zerodha', alias: 'kite zerodha wallet' });
+}
+async function reviewZerodhaPnl(f, rows, summary) {
+  const e = store.activeEntity();
+  const wallet = await zerodhaWallet(e);
+  const c = store.ctxOf(e.id);
+  const st = { walletId: wallet.id, saveSummary: !!summary };
+  const plan = planZerodhaPnl(c, store.assetsOf(e.id), rows);
+  const fyOfFile = rows.length ? fyOf(rows[rows.length - 1].exit || today()) : S.settings.fy;
+  const sumBox = h('div');
+  const drawSum = () => {
+    const d = plan.delivery.filter(x => x.include), t = plan.trades.filter(x => x.include);
+    const prof = d.reduce((s2, x) => s2 + x.row.profit, 0), tp = t.reduce((s2, x) => s2 + x.pl - x.charges, 0);
+    clear(sumBox).appendChild(h('div.rev-sum',
+      kpiBox('Shares & funds sold', String(d.length), d.filter(x => x.action === 'buy+sell').length + ' purchase(s) added too'),
+      kpiBox('Profit on them (Zerodha)', amt(prof, { flow: true })),
+      kpiBox('F&O / intraday days', String(t.length), 'net after charges ' + money(tp, { sign: true })),
+      kpiBox('Already imported', String(plan.delivery.filter(x => x.dup).length + plan.trades.filter(x => x.dup).length), 'unticked')));
+  };
+  const dRows = plan.delivery.map(d => {
+    const inc = h('input', { type: 'checkbox', checked: d.include, onchange: ev => { d.include = ev.target.checked; drawSum(); } });
+    const what = h('div');
+    const drawWhat = () => {
+      clear(what);
+      if (d.dup) { add(what, h('span.pill.warn', 'already imported')); return; }
+      if (d.action === 'sell-only') add(what, h('span.pill.ok', 'sale only'), h('div.small.muted', 'uses your purchases in Portfolio · ', h('a', { href: '#', onclick: ev => { ev.preventDefault(); d.action = 'buy+sell'; drawWhat(); drawSum(); } }, 'add purchase too')));
+      else add(what, h('span.pill.gold', 'purchase + sale'), h('div.small.muted', d.asset ? 'Portfolio holds less than this — purchase added' : 'new to Portfolio', d.asset ? [' · ', h('a', { href: '#', onclick: ev => { ev.preventDefault(); d.action = 'sell-only'; drawWhat(); drawSum(); } }, 'sale only')] : null));
+    };
+    drawWhat();
+    return h('tr', h('td', inc), h('td', d.row.symbol, h('div.narr', KIND_NAME[d.row.kind] || d.row.kind)), h('td.nowrap', fmtDate(d.row.entry)), h('td.nowrap', fmtDate(d.row.exit)), h('td.r', String(d.row.qty)),
+      h('td.r.amt', money(d.row.buy)), h('td.r.amt', money(d.row.sell)), h('td.r', amt(d.row.profit, { flow: true })), h('td', what));
+  });
+  const tRows = plan.trades.map(t => h('tr', h('td', h('input', { type: 'checkbox', checked: t.include, onchange: ev => { t.include = ev.target.checked; drawSum(); } })), h('td.nowrap', fmtDate(t.date)), h('td', SEG_NAME[t.segment], h('div.narr', t.count + ' trade(s): ' + t.symbols.join(', ') + (t.count > t.symbols.length ? '…' : ''))),
+    h('td.r', amt(t.pl, { flow: true })), h('td.r.amt', money(t.charges)), h('td.r.amt', money(t.turnover)), h('td', t.dup ? h('span.pill.warn', 'already imported') : '')));
+  const md = openModal({
+    title: 'Review Zerodha P&L', sub: f.name + ' · ' + rows.length + ' closed trades. Nothing is saved until you approve.', size: 'xwide', sticky: true,
+    body: h('div', sumBox,
+      h('div.grid.g2', field('Money moves through', combo(ledgerItems(c, l => ['wallet', 'bank'].includes(c.natureOf(l))), st.walletId, id => { st.walletId = id; })), summary ? h('label.check', { style: { alignSelf: 'end' } }, h('input', { type: 'checkbox', checked: st.saveSummary, onchange: ev => { st.saveSummary = ev.target.checked; } }), h('span', 'Also save the yearly tax summary', h('div.small.muted', 'gains, F&O and dividend totals for the tax phase'))) : h('span')),
+      plan.delivery.length ? [h('div.section-h', h('h2', 'Shares & funds sold')), h('div.tbl-wrap', { style: { maxHeight: '36vh', overflowY: 'auto' } }, h('table.tbl.rev-tbl', h('thead', h('tr', h('th', '✓'), h('th', 'Symbol'), h('th', 'Bought'), h('th', 'Sold'), h('th.r', 'Qty'), h('th.r', 'Buy value'), h('th.r', 'Sell value'), h('th.r', 'Profit'), h('th', 'What will be added'))), h('tbody', dRows)))] : null,
+      plan.trades.length ? [h('div.section-h', h('h2', 'F&O / intraday (one entry per day)')), h('div.tbl-wrap', { style: { maxHeight: '26vh', overflowY: 'auto' } }, h('table.tbl.rev-tbl', h('thead', h('tr', h('th', '✓'), h('th', 'Date'), h('th', 'Segment'), h('th.r', 'P&L'), h('th.r', 'Charges'), h('th.r', 'Turnover'), h('th'))), h('tbody', tRows)))] : null,
+      h('p.small.muted', 'Sales use oldest-first (FIFO) like Zerodha. Brokerage and exchange charges reduce the sale value; STT on share sales is recorded separately because it is not allowed against capital gains. Purchases and sales go through the wallet, so money you added to it from the bank is counted once.')),
+    foot: [h('span.left.small.muted', 'Can be undone from Import history.'), h('button.btn', { onclick: () => md.close() }, 'Cancel'), h('button.btn.primary', { onclick: approve }, 'Approve & add')]
+  });
+  drawSum();
+  async function approve() {
+    if (!plan.delivery.some(x => x.include) && !plan.trades.some(x => x.include)) { if (!(st.saveSummary && summary)) return toast('Nothing selected'); }
+    try {
+      const types = new Set(plan.delivery.filter(x => x.include && !x.asset).map(x => ({ mf: 'equity_mf', nonequity: 'etf_other' }[x.row.kind] || 'equity')));
+      const ledgerByType = {};
+      for (const tp of types) { const T = ASSET_TYPES[tp]; ledgerByType[tp] = (await store.ensureLedgerNamed(e.id, T.fixed ? 'fixed' : 'invest', T.ledger)).id; }
+      const stocks = (await store.ensureLedgerNamed(e.id, 'invest', 'Stocks')).id;
+      const stt = (await store.ensureLedgerNamed(e.id, 'personal', 'STT on share sales (not deductible)', { taxTag: 'personal' })).id;
+      const batchId = uid('bat');
+      const c2 = store.ctxOf(e.id);
+      const out = buildZerodhaPostings(c2, store.assetsOf(e.id), plan, { walletId: st.walletId, ledgerForType: tp => ledgerByType[tp] || stocks, sttLedgerId: stt, batchId });
+      if (out.problems.length && !(await confirmBox('Some sales are larger than the holdings', out.problems.join(' · ') + ' — continue anyway?', 'Continue'))) return;
+      const keyIds = {};
+      for (const v of out.vouchers) for (const l of v.lines) if (!c2.lById.has(l.ledgerId) && !keyIds[l.ledgerId]) keyIds[l.ledgerId] = (await store.ensureGainLedger(e.id, l.ledgerId)).id;
+      const vouchers = out.vouchers.map(v => ({ ...v, lines: tidyLines(v.lines.map(l => (keyIds[l.ledgerId] ? { ...l, ledgerId: keyIds[l.ledgerId] } : l))) }));
+      const batch = { id: batchId, entityId: e.id, kind: 'zerodha_pnl', file: f.name, count: vouchers.length, assetIds: out.newAssets.map(a => a.id), createdAt: nowISO() };
+      const ops = [{ store: 'batches', put: batch }, ...out.newAssets.map(a => ({ store: 'assets', put: a }))];
+      if (st.saveSummary && summary) {
+        const existing = S.taxpnl.find(x => x.entityId === e.id && x.fy === (summary.fy || fyOfFile));
+        ops.push({ store: 'taxpnl', put: { id: existing ? existing.id : uid('tpl'), entityId: e.id, fy: summary.fy || fyOfFile, file: f.name, source: 'zerodha', batchId, ledgerClose: summary.ledgerClose, dividendRows: summary.dividendRows, createdAt: nowISO(), stcg: summary.stcg, ltcg: summary.ltcg, intraday: summary.intraday, nonEquity: summary.nonEquity, foOptions: summary.foOptions, foFutures: summary.foFutures, dividends: summary.dividends } });
+      }
+      await store.commit(ops);
+      if (vouchers.length) await store.saveVouchers(vouchers);
+      md.close();
+      toast('Zerodha P&L added · ' + vouchers.length + ' entries');
+      location.hash = '#/gains';
+    } catch (err) { toast(err.message); }
+  }
+}
+async function reviewConsolePnl(f, con) {
+  const e = store.activeEntity();
+  const wallet = await zerodhaWallet(e);
+  const c = store.ctxOf(e.id);
+  const st = { walletId: wallet.id };
+  const total = con.items.reduce((s2, x) => s2 + x.profit, 0);
+  const seg = select([{ value: 'futures', label: 'F&O – futures' }, { value: 'options', label: 'F&O – options' }, { value: 'intraday', label: 'Intraday shares' }], con.segment === 'intraday' ? 'intraday' : con.items.some(x => /(CE|PE)$/i.test(x.symbol)) ? 'options' : 'futures');
+  const date = dateInput(fyRange(S.settings.fy).to < today() ? fyRange(S.settings.fy).to : today());
+  const charges = amountInput(con.charges);
+  const isEquity = con.segment === 'equity';
+  const md = openModal({
+    title: 'Review Zerodha P&L (Console)', sub: f.name + ' · ' + con.items.length + ' symbols · realised ' + money(total, { sign: true }), size: 'wide',
+    body: h('div',
+      isEquity ? h('div.note.warn', 'This P&L has no buy and sell dates, so short / long term cannot be worked out. For shares and funds please import the Tax P&L file (it has the “Tradewise Exits” sheet). You can still add the total below as one trading result if these were intraday trades.') : null,
+      h('div.tbl-wrap', { style: { maxHeight: '36vh', overflowY: 'auto' } }, h('table.tbl', h('thead', h('tr', h('th', 'Symbol'), h('th.r', 'Buy value'), h('th.r', 'Sell value'), h('th.r', 'Realised P&L'))), h('tbody', con.items.map(x => h('tr', h('td', x.symbol), h('td.r.amt', money(x.buy)), h('td.r.amt', money(x.sell)), h('td.r', amt(x.profit, { flow: true }))))))),
+      h('div.grid.g4', { style: { marginTop: '10px' } }, field('Add as', seg), field('Date of the entry', date, 'e.g. last day of the period'), field('Charges', charges), field('Money moves through', combo(ledgerItems(c, l => ['wallet', 'bank'].includes(c.natureOf(l))), st.walletId, id => { st.walletId = id; })))),
+    foot: [h('button.btn', { onclick: () => md.close() }, 'Cancel'), h('button.btn.primary', { onclick: async () => {
+      const dup = c.vouchers.some(v => v.meta && v.meta.trade && v.date === date.value && v.meta.trade.pl === total);
+      if (dup && !(await confirmBox('Already imported?', 'A trading result with the same date and amount exists.', 'Add anyway'))) return;
+      const plId = (await store.ensureGainLedger(e.id, seg.value === 'intraday' ? 'trade_intraday' : 'trade_fo')).id;
+      const ch = charges.paise();
+      const chId = ch ? (await store.ensureGainLedger(e.id, 'trade_charges')).id : null;
+      const net = total - ch;
+      const lines = tidyLines([total > 0 ? { ledgerId: plId, cr: total } : total < 0 ? { ledgerId: plId, dr: -total } : null, ch ? { ledgerId: chId, dr: ch } : null, net > 0 ? { ledgerId: st.walletId, dr: net } : net < 0 ? { ledgerId: st.walletId, cr: -net } : null].filter(Boolean));
+      const turnover = con.items.reduce((s2, x) => s2 + Math.abs(x.profit), 0);
+      const batchId = uid('bat');
+      try {
+        await store.commit([{ store: 'batches', put: { id: batchId, entityId: e.id, kind: 'zerodha_pnl', file: f.name, count: 1, assetIds: [], createdAt: nowISO() } }]);
+        await store.saveVouchers([newVoucher(e.id, { type: net >= 0 ? 'receipt' : 'payment', src: 'trading', date: date.value, narration: (SEG_NAME[seg.value] || '') + ' – Zerodha P&L', batchId, lines, meta: { trade: { segment: seg.value, pl: total, charges: ch, stt: 0, premium: Math.max(0, turnover - Math.abs(total)), source: 'zerodha-pnl' } } })]);
+        md.close(); toast('Added to F&O / intraday'); location.hash = '#/trading';
+      } catch (err) { toast(err.message); }
+    } }, 'Add')]
+  });
+}
+
 /* ================= Zerodha ================= */
-export async function importTaxPnl() {
-  const f = await pickFile('.xlsx,.xls'); if (!f) return;
-  let res;
-  try { res = parseTaxPnl(await readWorkbook(await f.arrayBuffer()), f.name, S.settings.fy); } catch (e) { return toast('Could not read the file: ' + e.message); }
-  if (res.error) return openModal({ title: 'Not imported', body: h('div.note.warn', res.error) });
+function editTaxSummary(f, res) {
   const persons = store.sortedEntities();
   const ent = select(persons.map(e => ({ value: e.id, label: e.name })), store.activeEntity().id);
   const fy = select(fyList(8, 1).map(x => ({ value: x, label: 'FY ' + x })), res.fy);

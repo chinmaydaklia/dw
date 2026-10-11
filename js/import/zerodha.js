@@ -111,3 +111,91 @@ export function parseHoldings(rows) {
   if (!items.length) return { error: 'No holdings with quantity found in the file.' };
   return { items, cost: items.reduce((t, x) => t + x.cost, 0), value: items.reduce((t, x) => t + x.value, 0) };
 }
+
+/* ---------- Tax P&L "Tradewise Exits" sheet: one row per closed trade, grouped in sections ----------
+   Sections: Equity - Intraday / Short Term / Long Term / Buyback, Non Equity, Mutual Funds, F&O, Currency, Commodity.
+   Header: Symbol | ISIN | Entry Date | Exit Date | Quantity | Buy Value | Sell Value | Profit | Period of Holding |
+           Fair Market Value | Taxable Profit | Turnover | Brokerage | … charges … | STT */
+const SECTION_KIND = [
+  [/intraday|speculat/i, 'intraday'], [/buy ?back/i, 'buyback'], [/short/i, 'short'], [/long/i, 'long'],
+  [/non[\s-]*equity/i, 'nonequity'], [/mutual/i, 'mf'], [/f\s*&\s*o|futures|options|derivative/i, 'fo'], [/currency/i, 'currency'], [/commodit/i, 'commodity']
+];
+export const DELIVERY_KINDS = new Set(['short', 'long', 'buyback', 'nonequity', 'mf']);
+const norm = v => String(v == null ? '' : v).toLowerCase().replace(/\s+/g, ' ').trim();
+function headerMap(row) {
+  const m = {};
+  row.forEach((c, i) => {
+    const t = norm(c);
+    if (!t) return;
+    if (t === 'symbol' || t === 'scrip' || t === 'instrument') m.symbol = i;
+    else if (t === 'isin') m.isin = i;
+    else if (/^entry date|^buy date/.test(t)) m.entry = i;
+    else if (/^exit date|^sell date/.test(t)) m.exit = i;
+    else if (/^quantity|^qty/.test(t)) m.qty = i;
+    else if (/^buy value/.test(t)) m.buy = i;
+    else if (/^sell value/.test(t)) m.sell = i;
+    else if (t === 'profit' || /^realized p&l$|^realised p&l$|^p&l$/.test(t)) m.profit = i;
+    else if (/period of holding/.test(t)) m.days = i;
+    else if (/fair market value/.test(t)) m.fmv = i;
+    else if (/taxable profit/.test(t)) m.taxable = i;
+    else if (t === 'turnover') m.turnover = i;
+    else if (t === 'stt' || /securities transaction/.test(t)) m.stt = i;
+    else if (/brokerage|exchange transaction|ipft|sebi|gst|stamp/.test(t)) (m.charges = m.charges || []).push(i);
+  });
+  return m;
+}
+const money = v => { const n = numCell(v); return n === null ? 0 : Math.round(n * 100); };
+export function parseTradewise(sheets, parseDate) {
+  const name = Object.keys(sheets).find(n => /tradewise|trade ?wise|exits/i.test(n));
+  if (!name) return { error: 'No “Tradewise Exits” sheet in this file.' };
+  const rows = sheets[name];
+  const out = [];
+  let kind = '', head = null;
+  for (const r of rows) {
+    const cells = (r || []).map(norm);
+    const filled = cells.filter(Boolean);
+    if (!filled.length) { head = null; continue; }
+    const h = headerMap(r);
+    if (h.symbol !== undefined && (h.exit !== undefined || h.sell !== undefined) && h.qty !== undefined) { head = h; continue; }
+    /* a section title: a short text-only row such as "Equity - Long Term" */
+    const sec = filled.length <= 2 && !filled.some(c => numCell(c) !== null) ? SECTION_KIND.find(([re]) => re.test(filled.join(' '))) : null;
+    if (sec) { kind = sec[1]; head = null; continue; }
+    if (!head) continue;
+    const sym = String(r[head.symbol] == null ? '' : r[head.symbol]).trim();
+    const qty = numCell(r[head.qty]);
+    if (!sym || qty === null || /^total/i.test(sym)) continue;
+    const charges = (head.charges || []).reduce((t, i) => t + money(r[i]), 0);
+    out.push({
+      kind: kind || 'short', symbol: sym, isin: head.isin !== undefined ? String(r[head.isin] || '').trim() : '',
+      entry: head.entry !== undefined ? parseDate(r[head.entry]) : '', exit: head.exit !== undefined ? parseDate(r[head.exit]) : '',
+      qty: Math.abs(qty), buy: Math.abs(money(r[head.buy])), sell: Math.abs(money(r[head.sell])), profit: head.profit !== undefined ? money(r[head.profit]) : money(r[head.sell]) - money(r[head.buy]),
+      days: head.days !== undefined ? numCell(r[head.days]) : null, fmv: head.fmv !== undefined ? money(r[head.fmv]) : 0,
+      turnover: head.turnover !== undefined ? Math.abs(money(r[head.turnover])) : 0, charges, stt: head.stt !== undefined ? money(r[head.stt]) : 0
+    });
+  }
+  if (!out.length) return { error: 'The Tradewise Exits sheet has no trades.' };
+  return { rows: out, sheet: name };
+}
+
+/* ---------- Console P&L export (no trade dates): symbol-wise realised P&L plus a charges summary ---------- */
+export function parseConsolePnl(sheets, fileName = '') {
+  for (const [name, rows] of Object.entries(sheets)) {
+    const hi = rows.findIndex(r => { const h = headerMap(r || []); return h.symbol !== undefined && h.profit !== undefined && h.buy !== undefined; });
+    if (hi < 0) continue;
+    const h = headerMap(rows[hi]);
+    const items = [];
+    for (const r of rows.slice(hi + 1)) {
+      const sym = String((r || [])[h.symbol] == null ? '' : r[h.symbol]).trim();
+      if (!sym || /^total/i.test(sym)) continue;
+      const pl = numCell(r[h.profit]); if (pl === null) continue;
+      items.push({ symbol: sym, isin: h.isin !== undefined ? String(r[h.isin] || '') : '', qty: numCell(r[h.qty]) || 0, buy: money(r[h.buy]), sell: money(r[h.sell]), profit: Math.round(pl * 100) });
+    }
+    /* charges summary block above the table: "Charges" label with a number beside it */
+    let charges = 0;
+    for (const r of rows.slice(0, hi)) { const t = norm((r || [])[0]); if (/^charges$|total charges/.test(t)) { const n = (r || []).slice(1).map(numCell).find(x => x !== null); if (n !== null && n !== undefined) charges = Math.round(n * 100); } }
+    const text = (name + ' ' + fileName + ' ' + JSON.stringify(rows.slice(0, hi))).toLowerCase();
+    const segment = /f\s*&\s*o|fno|derivative|futures|options/.test(text) ? 'fo' : /intraday/.test(text) ? 'intraday' : 'equity';
+    return { items, charges, segment, sheet: name };
+  }
+  return { error: 'Could not find the Symbol / Buy Value / Realized P&L table.' };
+}

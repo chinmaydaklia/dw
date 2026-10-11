@@ -12,6 +12,7 @@ export const ASSET_TYPES = {
   etf: { name: 'ETF – equity', cls: 'equity', units: true, dp: 0, unit: 'units', ledger: 'Stocks', priceSrc: 'manual' },
   debt_mf: { name: 'Mutual fund – debt', cls: 'debt_mf', units: true, dp: 3, unit: 'units', ledger: 'Mutual Funds', priceSrc: 'mf' },
   gold_etf: { name: 'Gold ETF / gold fund', cls: 'other12', units: true, dp: 3, unit: 'units', ledger: 'Gold', priceSrc: 'mf' },
+  etf_other: { name: 'ETF – non-equity (liquid, debt, international)', cls: 'other12', units: true, dp: 0, unit: 'units', ledger: 'Stocks', priceSrc: 'manual' },
   sgb: { name: 'Sovereign gold bond', cls: 'other12', units: true, dp: 0, unit: 'grams', ledger: 'Gold', priceSrc: 'manual' },
   gold: { name: 'Gold – physical / digital', cls: 'other24', units: true, dp: 3, unit: 'grams', ledger: 'Gold', priceSrc: 'manual' },
   crypto: { name: 'Crypto', cls: 'vda', units: true, dp: 8, unit: 'coins', ledger: 'Crypto (CoinDCX)', priceSrc: 'crypto' },
