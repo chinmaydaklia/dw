@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en-IN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0b1d33">
+<meta name="description" content="DoctorWealth Books — offline double-entry accounts for a doctor's family.">
+<title>DoctorWealth</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<link rel="stylesheet" href="css/app.css">
+<script>
+  /* apply the saved theme before first paint to avoid a flash */
+  try { var t = JSON.parse(localStorage.getItem('dwb_theme') || 'null'); if (t === 'light' || t === 'dark') document.documentElement.setAttribute('data-theme', t); } catch (e) {}
+</script>
+</head>
+<body>
+<div id="app"><p style="padding:24px;color:#6b7a90">Opening your books…</p></div>
+<noscript><p style="padding:24px">DoctorWealth needs JavaScript enabled.</p></noscript>
+<script type="module" src="js/main.js"></script>
+</body>
+</html>
