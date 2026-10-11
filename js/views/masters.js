@@ -31,17 +31,19 @@ export function renderLedgers(root) {
         const ls = c.ledgers.filter(l => l.groupId === g.id && (ui.archived || !l.archived) && (!q || (l.name + ' ' + l.alias).toLowerCase().includes(q))).sort((a, b) => a.order - b.order || a.name.localeCompare(b.name));
         if (q && !ls.length) continue;
         const gt = ls.reduce((t, l) => t + bal.get(l.id).closing, 0);
-        blocks.push(h('tr.grp', h('td', groupName(g), ' ', h('button.btn.ghost.sm', { onclick: () => editGroup(g), title: t('Rename section', 'Edit group') }, '✎')), h('td.hide-sm'), h('td.r.amt', showBal(gt, g.root))));
+        blocks.push(h('tr.grp', h('td', groupName(g), ' ', h('button.btn.ghost.sm', { onclick: () => editGroup(g), title: t('Rename section', 'Edit group'), 'aria-label': 'Rename section ' + g.name }, '✎')), h('td.hide-sm'), h('td.r.amt', showBal(gt, g.root)), h('td')));
         for (const l of ls) {
           const site = (c.entity.sites || []).find(s => s.id === l.siteId);
           blocks.push(h('tr.click', { onclick: () => { location.hash = (isCA() ? '#/ca-ledger/' : '#/ledger/') + l.id; } },
             h('td.ind', ledgerName(l), l.archived ? h('span.pill', ' hidden') : null, l.system === 'capital' ? h('span.muted.small', t(' (worked out automatically)', ' (balancing figure)')) : null),
             h('td.hide-sm', h('span.small.muted', TAX_TAGS[l.taxTag] ? TAX_TAGS[l.taxTag].label : ''), site ? h('span.pill.gold', { style: { marginLeft: '6px' } }, site.name) : null, l.tdsBps ? h('span.pill', { style: { marginLeft: '6px' } }, 'TDS ' + l.tdsBps / 100 + '%') : null, l.interEntityWith ? h('span.pill', { style: { marginLeft: '6px' } }, t('family', 'inter-entity')) : null),
-            h('td.r.amt', showBal(bal.get(l.id).closing, root2))));
+            h('td.r.amt', showBal(bal.get(l.id).closing, root2)),
+            /* edit straight from the list (clicking the row opens its history) */
+            h('td.r', { style: { width: '1%' } }, h('button.btn.sm', { title: 'Rename, move to another section, tax treatment, starting balance', 'aria-label': 'Edit ' + l.name, onclick: ev => { ev.stopPropagation(); editLedger(l); } }, '✎ Edit'))));
         }
       }
       if (!blocks.length) continue;
-      add(out, h('div.section-h', h('h2', t(PLAIN_ROOT[root2], ROOTS[root2].name))), h('div.card', h('div.tbl-wrap', h('table.tbl', h('thead', h('tr', h('th', t('Name', 'Ledger')), h('th.hide-sm', t('Tax treatment / site', 'Tax tag / site')), h('th.r', t('Today', 'Balance today')))), h('tbody', blocks)))));
+      add(out, h('div.section-h', h('h2', t(PLAIN_ROOT[root2], ROOTS[root2].name))), h('div.card', h('div.tbl-wrap', h('table.tbl', h('thead', h('tr', h('th', t('Name', 'Ledger')), h('th.hide-sm', t('Tax treatment / site', 'Tax tag / site')), h('th.r', t('Today', 'Balance today')), h('th'))), h('tbody', blocks)))));
     }
   }
   draw();
@@ -114,7 +116,7 @@ export function renderLedger(root, id) {
   const isMoney = ['cash', 'bank', 'card'].includes(g.nature);
   add(root, h('div.toolbar', h('a.btn.sm', { href: isCA() ? '#/ca-ledgers' : '#/ledgers' }, '← ' + t('Accounts', 'Ledgers')), h('span.muted', groupName(g) + ' · ' + (TAX_TAGS[l.taxTag] || {}).label), periodControl(draw), h('span.spacer'), exp,
     isMoney ? h('button.btn.sm', { onclick: () => import('./importer.js').then(m => m.importStatement(l.id)) }, '⇩ Import statement') : null,
-    h('button.btn.sm', { onclick: () => editLedger(l) }, 'Edit')), out);
+    h('button.btn.sm.primary', { onclick: () => editLedger(l) }, '✎ Edit')), out);
   function draw() {
     const p = currentPeriod();
     const st = ledgerStatement(c, id, p);
