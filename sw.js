@@ -1,6 +1,6 @@
 /* DoctorWealth Books service worker: the whole app (code + bundled libraries) is cached so it opens and
    works with no network. A new version waits until the user taps "Reload" in the app. */
-const VERSION = '1.3.1';
+const VERSION = '1.3.2';
 const CACHE = 'dwb-' + VERSION;
 const SHELL = [
   './', './index.html', './manifest.webmanifest', './css/app.css',
@@ -16,7 +16,9 @@ const SHELL = [
 ];
 
 self.addEventListener('install', e => {
-  e.waitUntil(caches.open(CACHE).then(c => c.addAll(SHELL)));
+  /* cache:'reload' bypasses the browser's HTTP cache, so a new version can never be filled with stale
+     copies of old files (that mix made old code open a newer database: "requested version 1 < existing 2") */
+  e.waitUntil(caches.open(CACHE).then(c => c.addAll(SHELL.map(u => new Request(u, { cache: 'reload' })))));
 });
 self.addEventListener('activate', e => {
   e.waitUntil(caches.keys().then(keys => Promise.all(keys.filter(k => k.startsWith('dwb-') && k !== CACHE).map(k => caches.delete(k)))).then(() => self.clients.claim()));

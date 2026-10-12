@@ -8,7 +8,7 @@ import { buildDemo } from '../core/demo.js';
 import { uid, nowISO, clone } from '../lib/util.js';
 import { today, fyOf } from '../lib/dates.js';
 
-export const APP_VERSION = '1.3.1';
+export const APP_VERSION = '1.3.2';
 export const SCHEMA_VERSION = 4;
 const COLLS = ['entities', 'groups', 'ledgers', 'vouchers', 'rules', 'recurring', 'shortcuts', 'batches', 'holdings', 'taxpnl', 'assets'];
 

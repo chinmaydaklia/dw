@@ -5,6 +5,17 @@ export const STORES = ['meta', 'entities', 'groups', 'ledgers', 'vouchers', 'aud
 const BY_ENTITY = ['groups', 'ledgers', 'vouchers', 'audit', 'rules', 'recurring', 'shortcuts', 'batches', 'holdings', 'taxpnl', 'assets'];
 
 let dbp = null;
+/* Drop cached app code (service worker + 'dwb-' caches) and reload once. IndexedDB data is NOT touched. */
+export function refreshAppFiles(force) {
+  try {
+    if (!force && sessionStorage.getItem('dwb_refreshed')) return false;
+    sessionStorage.setItem('dwb_refreshed', '1');
+  } catch (e) { if (!force) return false; }
+  const regs = navigator.serviceWorker ? navigator.serviceWorker.getRegistrations().then(rs => Promise.all(rs.map(r => r.unregister()))) : Promise.resolve();
+  const caches_ = window.caches ? caches.keys().then(ks => Promise.all(ks.filter(k => k.startsWith('dwb-')).map(k => caches.delete(k)))) : Promise.resolve();
+  Promise.all([regs, caches_]).catch(() => {}).then(() => location.reload());
+  return true;
+}
 export function openDB() {
   if (dbp) return dbp;
   dbp = new Promise((resolve, reject) => {
@@ -18,7 +29,15 @@ export function openDB() {
       }
     };
     req.onsuccess = () => { const db = req.result; db.onversionchange = () => db.close(); resolve(db); };
-    req.onerror = () => reject(req.error);
+    req.onerror = () => {
+      const err = req.error;
+      /* VersionError = this is an OLDER copy of the app than the one that last opened the database.
+         The data is fine; the cached app files are stale. Refresh the app files once (never touches the data). */
+      if (err && err.name === 'VersionError' && refreshAppFiles()) return;
+      reject(err && err.name === 'VersionError'
+        ? new Error('This is an older copy of the app than your data (database v' + IDB_VERSION + '). Tap "Update app" below')
+        : err);
+    };
     req.onblocked = () => reject(new Error('The database is open in another tab with an older version. Close other tabs and reload.'));
   });
   return dbp;
