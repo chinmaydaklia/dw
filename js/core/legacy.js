@@ -60,7 +60,8 @@ export function legacyBalances(s) {
   return m;
 }
 
-const ACC_GROUP = { bank: 'bank', cash: 'cash', card: 'cards', investment: 'invest', wallet: 'bank', business: 'bank', spouse: 'bank' };
+/* the old app's 'investment' accounts were broker wallets (Kite Wallet, CoinDCX): money accounts, not investments */
+const ACC_GROUP = { bank: 'bank', cash: 'cash', card: 'cards', investment: 'wallets', wallet: 'wallets', business: 'bank', spouse: 'bank' };
 const INV_LEDGER = t => {
   const s = String(t || '').toLowerCase();
   if (/stock|etf|share|equity/.test(s)) return 'Stocks';
@@ -107,7 +108,7 @@ export function suggestMapping(s, targets) {
   };
   for (const a of s.accounts) {
     const o = ownerOfAccount(s, a.id);
-    const nat = { bank: ['bank'], wallet: ['bank'], business: ['bank'], spouse: ['bank'], cash: ['cash'], card: ['card'], investment: ['investment'] }[a.type] || null;
+    const nat = { bank: ['bank'], wallet: ['wallet', 'bank'], business: ['bank'], spouse: ['bank'], cash: ['cash'], card: ['card'], investment: ['wallet'] }[a.type] || null;
     map['acc:' + a.id] = find(o, a.name, nat);
   }
   for (const c of s.incomeCats) for (const o of ['me', 'spouse']) map[o + ':inc:' + c.id] = find(o, c.name, ['profincome', 'otherincome']);
@@ -142,7 +143,7 @@ export function buildLegacyPlan(src, targets, mapping = {}) {
   const addOpening = (ledgerId, amt) => { if (amt) plan.openingDeltas.set(ledgerId, (plan.openingDeltas.get(ledgerId) || 0) + amt); };
   const inter = (o, other) => {
     const t = ent(o), ot = ent(other);
-    return t.ledgers.find(l => l.interEntityWith === ot.entity.id) || addLedger(o, 'advances', 'Current A/c – ' + ot.entity.name, { interEntityWith: ot.entity.id, note: 'Money held for / owed by ' + ot.entity.name + '. Balances cancel out in the family view.' });
+    return t.ledgers.find(l => l.interEntityWith === ot.entity.id) || addLedger(o, 'advances', 'Money with ' + ot.entity.name, { interEntityWith: ot.entity.id, note: 'Money given or taken that is to be returned. A positive balance means they owe you.' });
   };
   const dateOf = (...c) => c.find(isDate) || today();
   const push = (o, p) => {

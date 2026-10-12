@@ -14,25 +14,53 @@ export const ROOT_ORDER = ['asset', 'liability', 'capital', 'income', 'expense']
 
 /* nature drives behaviour: cash/bank are "money" ledgers (contra, cash flow, cash-vs-digital); card is a
    money-like liability used for payments. */
+/* name = plain wording shown by default; caName = formal accounting name shown in the CA view */
 export const GROUP_TEMPLATE = [
-  { key: 'bank', name: 'Bank Accounts', root: 'asset', nature: 'bank' },
-  { key: 'cash', name: 'Cash-in-Hand', root: 'asset', nature: 'cash' },
-  { key: 'invest', name: 'Investments', root: 'asset', nature: 'investment' },
-  { key: 'advances', name: 'Loans & Advances (Asset)', root: 'asset', nature: 'advance' },
-  { key: 'taxassets', name: 'Taxes Paid & TDS', root: 'asset', nature: 'taxasset' },
-  { key: 'fixed', name: 'Fixed Assets', root: 'asset', nature: 'fixed' },
-  { key: 'loans', name: 'Loans (Liability)', root: 'liability', nature: 'loan' },
-  { key: 'cards', name: 'Credit Cards', root: 'liability', nature: 'card' },
-  { key: 'curliab', name: 'Current Liabilities', root: 'liability', nature: 'payable' },
-  { key: 'capital', name: 'Capital Account', root: 'capital', nature: 'capital' },
-  { key: 'profinc', name: 'Professional Receipts', root: 'income', nature: 'profincome' },
-  { key: 'othinc', name: 'Other Income', root: 'income', nature: 'otherincome' },
-  { key: 'profexp', name: 'Professional Expenses', root: 'expense', nature: 'profexpense' },
-  { key: 'finexp', name: 'Finance Costs', root: 'expense', nature: 'finance' },
-  { key: 'personal', name: 'Personal & Household', root: 'expense', nature: 'personal' }
+  { key: 'bank', name: 'Bank accounts', caName: 'Bank Accounts', root: 'asset', nature: 'bank' },
+  { key: 'cash', name: 'Cash', caName: 'Cash-in-Hand', root: 'asset', nature: 'cash' },
+  { key: 'wallets', name: 'Broker & wallet money', caName: 'Balances with Brokers / Wallets', root: 'asset', nature: 'wallet' },
+  { key: 'invest', name: 'Investments', caName: 'Investments', root: 'asset', nature: 'investment' },
+  { key: 'advances', name: 'Money lent to others', caName: 'Loans & Advances (Asset)', root: 'asset', nature: 'advance' },
+  { key: 'taxassets', name: 'Tax paid & TDS', caName: 'Taxes Paid & TDS', root: 'asset', nature: 'taxasset' },
+  { key: 'fixed', name: 'Car, equipment & property', caName: 'Fixed Assets', root: 'asset', nature: 'fixed' },
+  { key: 'loans', name: 'Loans I have taken', caName: 'Loans (Liability)', root: 'liability', nature: 'loan' },
+  { key: 'cards', name: 'Credit cards', caName: 'Credit Cards', root: 'liability', nature: 'card' },
+  { key: 'curliab', name: 'Bills to pay & unsorted', caName: 'Current Liabilities', root: 'liability', nature: 'payable' },
+  { key: 'capital', name: 'Net worth & family gifts', caName: 'Capital Account', root: 'capital', nature: 'capital' },
+  { key: 'profinc', name: 'Practice income', caName: 'Professional Receipts', root: 'income', nature: 'profincome' },
+  { key: 'othinc', name: 'Other income', caName: 'Other Income', root: 'income', nature: 'otherincome' },
+  { key: 'profexp', name: 'Practice expenses', caName: 'Professional Expenses', root: 'expense', nature: 'profexpense' },
+  { key: 'finexp', name: 'Loan interest & bank charges', caName: 'Finance Costs', root: 'expense', nature: 'finance' },
+  { key: 'personal', name: 'Personal & home', caName: 'Personal & Household', root: 'expense', nature: 'personal' }
 ];
-export const MONEY_NATURES = new Set(['bank', 'cash']);
-export const PAYMENT_NATURES = new Set(['bank', 'cash', 'card']);
+/* old (v1) names, used once to rename built-in groups the user has not renamed */
+export const OLD_GROUP_NAMES = { bank: 'Bank Accounts', cash: 'Cash-in-Hand', advances: 'Loans & Advances (Asset)', taxassets: 'Taxes Paid & TDS', fixed: 'Fixed Assets', loans: 'Loans (Liability)', cards: 'Credit Cards', curliab: 'Current Liabilities', capital: 'Capital Account', profinc: 'Professional Receipts', othinc: 'Other Income', profexp: 'Professional Expenses', finexp: 'Finance Costs', personal: 'Personal & Household' };
+/* built-in accounts with a plain name and a formal one */
+export const SYSTEM_NAMES = {
+  capital: { name: 'Starting net worth', caName: 'Capital Account', old: 'Capital Account' },
+  suspense: { name: 'To sort later', caName: 'Suspense', old: 'Suspense' },
+  gift_out: { name: 'Gifts given to family', caName: 'Drawings – gifts to relatives' },
+  gift_in: { name: 'Gifts received from family', caName: 'Capital introduced – gifts from relatives' }
+};
+/* investment profit accounts, created when first needed */
+export const GAIN_LEDGERS = {
+  gain_eq_st: { name: 'Profit on shares & equity funds – short term', caName: 'STCG – listed equity', tag: 'stcg_equity' },
+  gain_eq_lt: { name: 'Profit on shares & equity funds – long term', caName: 'LTCG – listed equity', tag: 'ltcg_equity' },
+  gain_oth_st: { name: 'Profit on other investments – short term', caName: 'STCG – other assets', tag: 'stcg_other' },
+  gain_oth_lt: { name: 'Profit on other investments – long term', caName: 'LTCG – other assets', tag: 'ltcg_other' },
+  gain_vda: { name: 'Profit on crypto', caName: 'Income from VDA', tag: 'vda_gain' },
+  trade_fo: { name: 'F&O trading profit / loss', caName: 'Business income – F&O (non-speculative)', tag: 'business_fo' },
+  trade_intraday: { name: 'Intraday trading profit / loss', caName: 'Speculative business income – intraday', tag: 'speculative' },
+  trade_charges: { name: 'Trading charges (brokerage, STT)', caName: 'Trading expenses', tag: 'trading_expense', expense: true },
+  inv_income: { name: 'Interest – PPF / NPS / other investments', caName: 'Interest on investments', tag: 'interest' }
+};
+export const OLD_LEDGER_NAMES = { 'Sundry Payables': 'Bills to pay' };
+/* money you can spend or move: broker / wallet balances count, so bank → Zerodha wallet is a transfer, not an investment */
+export const MONEY_NATURES = new Set(['bank', 'cash', 'wallet']);
+export const PAYMENT_NATURES = new Set(['bank', 'cash', 'card', 'wallet']);
+/* bank-statement words that mean money went to a broker / wallet (transfer) or straight into a mutual fund (investment) */
+export const BROKER_WORDS = [[/zerodha|\bkite\b/i, 'zerodha'], [/coindcx/i, 'coindcx'], [/groww/i, 'groww'], [/upstox|rksv/i, 'upstox'], [/angel\s*(one|broking)/i, 'angel']];
+export const MF_WORDS = /\b(bse ?(ltd|star)|iccl|nse clearing|indian clearing|cams|kfin|karvy|mutual fund|mf sip|sip\b|amc\b|bsestarmf)/i;
 
 /* Stable tax keys. Section references live in SECTION_REFS by tax year, so a renumbering
    (Income-tax Act, 2025) never touches stored data. */
@@ -44,7 +72,15 @@ export const TAX_TAGS = {
   rent: { label: 'House property – rent', roots: ['income'] },
   other_income: { label: 'Other income', roots: ['income'] },
   exempt: { label: 'Exempt income', roots: ['income'] },
-  capital_gain: { label: 'Capital gains', roots: ['income'] },
+  capital_gain: { label: 'Capital gains (unclassified)', roots: ['income'] },
+  stcg_equity: { label: 'Short-term gain – listed shares / equity funds', roots: ['income'] },
+  ltcg_equity: { label: 'Long-term gain – listed shares / equity funds', roots: ['income'] },
+  stcg_other: { label: 'Short-term gain – other investments (slab rate)', roots: ['income'] },
+  ltcg_other: { label: 'Long-term gain – other investments', roots: ['income'] },
+  vda_gain: { label: 'Crypto (virtual digital asset) gain', roots: ['income'] },
+  business_fo: { label: 'F&O trading – business income', roots: ['income'] },
+  speculative: { label: 'Intraday trading – speculative business', roots: ['income'] },
+  trading_expense: { label: 'Trading charges (business expense)', roots: ['expense'] },
   prof_expense: { label: 'Professional expense (deductible)', roots: ['expense'] },
   depreciation: { label: 'Depreciation', roots: ['expense'] },
   personal: { label: 'Personal (not deductible)', roots: ['expense'] },
@@ -57,7 +93,7 @@ export const TAX_TAGS = {
   none: { label: 'No tax effect', roots: ['asset', 'liability', 'capital', 'income', 'expense'] }
 };
 export const SECTION_REFS = {
-  '2025-26': { prof_receipts: '44ADA', books: '44AA', audit: '44AB', ded_80c: '80C', ded_80d: '80D', ded_80g: '80G', rebate: '87A', tds_prof: '194J', home_loan_interest: '24(b)' },
+  '2025-26': { prof_receipts: '44ADA', books: '44AA', audit: '44AB', ded_80c: '80C', ded_80d: '80D', ded_80g: '80G', rebate: '87A', tds_prof: '194J', home_loan_interest: '24(b)', stcg_equity: '111A', ltcg_equity: '112A', ltcg_other: '112', vda_gain: '115BBH', speculative: '43(5)' },
   '2026-27': { prof_receipts: '58', books: '62', audit: '63', ded_80c: '123', ded_80d: '126', rebate: '156', tds_prof: '393' }
 };
 export function sectionFor(tag, taxYear) {
@@ -72,10 +108,11 @@ const SELF = [
   ['bank', 'Bank of India', { alias: 'boi' }],
   ['bank', 'Kotak Savings', { alias: 'kotak' }],
   ['cash', 'Cash in Hand', { alias: 'cash' }],
-  ['invest', 'Zerodha Funds (Kite)', { alias: 'kite zerodha' }],
+  ['wallets', 'Zerodha wallet (Kite funds)', { alias: 'kite zerodha wallet', broker: 'zerodha' }],
+  ['wallets', 'CoinDCX wallet (INR)', { alias: 'coindcx wallet', broker: 'coindcx' }],
   ['invest', 'Stocks', {}],
   ['invest', 'Mutual Funds', { alias: 'mf sip' }],
-  ['invest', 'Crypto (CoinDCX)', { alias: 'coindcx crypto' }],
+  ['invest', 'Crypto (CoinDCX)', { alias: 'crypto btc' }],
   ['invest', 'Gold', {}],
   ['invest', 'Fixed Deposits', { alias: 'fd' }],
   ['invest', 'PPF', { taxTag: 'ded_80c' }],
@@ -90,9 +127,9 @@ const SELF = [
   ['loans', 'Home Loan', {}],
   ['loans', 'Car Loan', {}],
   ['cards', 'Credit Card', { alias: 'cc card' }],
-  ['curliab', 'Sundry Payables', {}],
-  ['curliab', 'Suspense', { system: 'suspense', note: 'Unclassified imported rows land here until you reclassify them.' }],
-  ['capital', 'Capital Account', { system: 'capital' }],
+  ['curliab', 'Bills to pay', {}],
+  ['curliab', 'To sort later', { system: 'suspense', note: 'Imported entries you have not sorted into a category yet. Open it and pick the right category.' }],
+  ['capital', 'Starting net worth', { system: 'capital', note: 'Worked out automatically: what you owned minus what you owed on the start date.' }],
   ['profinc', 'Professional Fees – PNH', { taxTag: 'prof_receipts', site: 'PNH', tdsBps: 1000, alias: 'pnh' }],
   ['profinc', 'Professional Fees – DKM', { taxTag: 'prof_receipts', site: 'DKM', tdsBps: 1000, alias: 'dkm' }],
   ['profinc', 'Clinic Receipts', { taxTag: 'prof_receipts', site: 'Clinic', alias: 'clinic opd' }],
@@ -138,7 +175,7 @@ const SPOUSE = [
   ['bank', 'IDFC FIRST Savings', { alias: 'idfc' }],
   ['bank', 'ICICI Savings', { alias: 'icici' }],
   ['cash', 'Cash in Hand', { alias: 'cash' }],
-  ['invest', 'Zerodha Funds (Kite)', { alias: 'kite zerodha' }],
+  ['wallets', 'Zerodha wallet (Kite funds)', { alias: 'kite zerodha wallet', broker: 'zerodha' }],
   ['invest', 'Stocks', {}],
   ['invest', 'Mutual Funds', { alias: 'mf sip' }],
   ['invest', 'Gold', {}],
@@ -147,8 +184,8 @@ const SPOUSE = [
   ['taxassets', 'TDS Receivable', { taxTag: 'tds_receivable', system: 'tds', alias: 'tds' }],
   ['taxassets', 'Advance Tax Paid', { taxTag: 'advance_tax' }],
   ['cards', 'Credit Card', { alias: 'cc card' }],
-  ['curliab', 'Suspense', { system: 'suspense' }],
-  ['capital', 'Capital Account', { system: 'capital' }],
+  ['curliab', 'To sort later', { system: 'suspense' }],
+  ['capital', 'Starting net worth', { system: 'capital', note: 'Worked out automatically: what you owned minus what you owed on the start date.' }],
   ['profinc', 'Professional Receipts', { taxTag: 'prof_receipts' }],
   ['othinc', 'Salary', { taxTag: 'salary' }],
   ['othinc', 'Interest – Savings Bank', { taxTag: 'interest', alias: 'sb interest' }],
@@ -185,7 +222,7 @@ export function seedMasters(entity, template = entity.template || 'self') {
   const siteId = n => (entity.sites.find(s => s.name === n) || {}).id || '';
   const ledgers = (TEMPLATES[template] || SELF).map(([gk, name, o], i) => makeLedger({
     entityId: entity.id, groupId: byKey[gk].id, name, alias: o.alias || '', taxTag: o.taxTag || defaultTag(byKey[gk]),
-    siteId: o.site ? siteId(o.site) : '', tdsBps: o.tdsBps || 0, system: o.system || '', note: o.note || '', order: i
+    siteId: o.site ? siteId(o.site) : '', tdsBps: o.tdsBps || 0, system: o.system || '', note: o.note || '', broker: o.broker || '', order: i
   }));
   return { groups, ledgers };
 }
@@ -202,7 +239,7 @@ export function makeLedger(p) {
   return {
     id: uid('led'), entityId: p.entityId, groupId: p.groupId, name: p.name, alias: p.alias || '',
     opening: p.opening || 0, taxTag: p.taxTag || 'none', siteId: p.siteId || '', tdsBps: p.tdsBps || 0,
-    system: p.system || '', interEntityWith: p.interEntityWith || '', archived: false, note: p.note || '',
+    system: p.system || '', interEntityWith: p.interEntityWith || '', broker: p.broker || '', archived: false, note: p.note || '',
     order: p.order || 0, createdAt: nowISO(), updatedAt: nowISO()
   };
 }

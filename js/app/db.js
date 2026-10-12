@@ -1,8 +1,8 @@
 /* Thin IndexedDB wrapper. One database, one object store per collection, all keyed by id. */
 export const DB_NAME = 'doctorwealth-books';
-export const IDB_VERSION = 1;
-export const STORES = ['meta', 'entities', 'groups', 'ledgers', 'vouchers', 'audit', 'rules', 'recurring', 'shortcuts', 'batches', 'holdings', 'taxpnl', 'backups'];
-const BY_ENTITY = ['groups', 'ledgers', 'vouchers', 'audit', 'rules', 'recurring', 'shortcuts', 'batches', 'holdings', 'taxpnl'];
+export const IDB_VERSION = 2;
+export const STORES = ['meta', 'entities', 'groups', 'ledgers', 'vouchers', 'audit', 'rules', 'recurring', 'shortcuts', 'batches', 'holdings', 'taxpnl', 'backups', 'assets'];
+const BY_ENTITY = ['groups', 'ledgers', 'vouchers', 'audit', 'rules', 'recurring', 'shortcuts', 'batches', 'holdings', 'taxpnl', 'assets'];
 
 let dbp = null;
 export function openDB() {

@@ -1,4 +1,4 @@
-/* App shell: sidebar / bottom bar, router, entity switcher, theme, global search and Tally-style shortcuts. */
+/* App shell: sidebar / bottom bar, router, person switcher, theme, global search and keyboard shortcuts. */
 import { h, clear, $, money, add } from '../ui/dom.js';
 import { openModal, toast, modalOpen } from '../ui/widgets.js';
 import * as store from './store.js';
@@ -11,22 +11,27 @@ import { renderDashboard } from '../views/dashboard.js';
 import { renderDaybook } from '../views/daybook.js';
 import { openEntry, openVoucher, openQuickAdd, renderDaily } from '../views/entry.js';
 import { renderLedgers, renderLedger } from '../views/masters.js';
-import { renderReport } from '../views/reports.js';
+import { renderReport, renderCaPack } from '../views/reports.js';
+import { renderFamilyMoney } from '../views/family.js';
+import { caView } from '../ui/terms.js';
+import { renderPortfolio, renderAsset, renderGains, renderTrading, renderPrices } from '../views/invest.js';
 import { renderImport } from '../views/importer.js';
 import { renderSettings, renderRecurring, renderHealth, renderAudit } from '../views/settings.js';
 
 const NAV = [
-  ['Overview', [['dashboard', '◧', 'Dashboard', 'G D'], ['family', '⌂', 'Family view', '']]],
-  ['Entry', [['quick', '+', 'Quick add', 'N'], ['daybook', '☰', 'Day book', 'G B'], ['daily', '✚', 'Clinic & hospital daily', ''], ['recurring', '↻', 'Recurring', '']]],
-  ['Books', [['ledgers', '▤', 'Ledgers & groups', 'G L']]],
-  ['Reports', [['tb', '⚖', 'Trial balance', 'G T'], ['pl', '↕', 'Profit & loss', 'G P'], ['bs', '▦', 'Balance sheet', 'G S'], ['cf', '⇄', 'Cash flow', 'G C'], ['networth', '↗', 'Net worth', ''], ['analysis', '◔', 'Analysis', 'G A'], ['cash', '₹', 'Cash vs digital', '']]],
-  ['Data', [['import', '⇩', 'Import', 'G I'], ['settings', '⚙', 'Settings & backup', ''], ['health', '✓', 'Health', '']]]
+  ['Overview', [['dashboard', '◧', 'Home', 'G D'], ['family', '⌂', 'Family', 'G F']]],
+  ['Add & view', [['quick', '+', 'Add entry', 'N'], ['daybook', '☰', 'All entries', 'G B'], ['spouse', '⇄', 'Money with family', ''], ['daily', '✚', 'Clinic & hospital daily', ''], ['recurring', '↻', 'Repeating entries', '']]],
+  ['My money', [['ledgers', '▤', 'Accounts & categories', 'G L']]],
+  ['Investments', [['portfolio', '◆', 'Portfolio', 'G V'], ['gains', '△', 'Capital gains', 'G G'], ['trading', '⇵', 'F&O / intraday', ''], ['prices', '₹', 'Update prices', '']]],
+  ['Reports', [['pl', '↕', 'Income & spending', 'G P'], ['bs', '▦', 'What I own & owe', 'G S'], ['networth', '↗', 'Net worth', ''], ['analysis', '◔', 'Breakdown', 'G A'], ['cf', '⇆', 'Money in & out', 'G C'], ['cash', '₹', 'Cash vs digital', '']]],
+  ['Data', [['import', '⇩', 'Import files', 'G I'], ['settings', '⚙', 'Settings & backup', ''], ['health', '✓', 'Checks', '']]],
+  ['For my CA', [['ca-pack', '⇩', 'Download CA pack', ''], ['tb', '⚖', 'Trial balance', 'G T'], ['ca-pl', '↕', 'Profit & loss account', ''], ['ca-bs', '▦', 'Balance sheet', ''], ['ca-daybook', '☰', 'Day book (Dr / Cr)', ''], ['ca-ledgers', '▤', 'Ledgers & groups', '']]]
 ];
 const TITLES = Object.fromEntries(NAV.flatMap(([, items]) => items.map(i => [i[0], i[2]])));
 const REPORTS = new Set(['tb', 'pl', 'bs', 'cf', 'networth', 'analysis', 'cash', 'family']);
 
 let route = { name: 'dashboard', args: [] };
-let root, side, content, titleEl, health = { ok: true, issues: [] };
+let root, side, content, titleEl, health = { ok: true, issues: [] }, lastRouteKey = '';
 
 export function start() {
   applyTheme();
@@ -43,14 +48,14 @@ export function start() {
     h('button.btn.ghost.icon', { title: 'Theme', 'aria-label': 'Change theme', onclick: cycleTheme }, '◐'),
     h('button.btn.primary.hide-phone', { onclick: () => openQuickAdd(), title: 'Quick add (N)' }, '+ Add'));
   const bottom = h('nav.bottombar', { 'aria-label': 'Quick navigation' },
-    navBtn('dashboard', '◧', 'Home'), navBtn('daybook', '☰', 'Day book'),
+    navBtn('dashboard', '◧', 'Home'), navBtn('daybook', '☰', 'Entries'),
     h('button.fab', { 'aria-label': 'Quick add', onclick: () => openQuickAdd() }, '+'),
     navBtn('pl', '↕', 'Reports'), h('button', { onclick: () => side.classList.add('open') }, h('span.ic', '≡'), 'More'));
   add(root, h('div.shell', side, h('div.main', h('div.accent-bar'), topbar, content)), bottom);
   side.addEventListener('click', e => { if (e.target === side) side.classList.remove('open'); });
   window.addEventListener('hashchange', () => { parseRoute(); render(); });
   document.addEventListener('keydown', onKey);
-  store.subscribe(() => { applyAccent(); runHealth(); render(); });
+  store.subscribe(() => { applyAccent(); runHealth(); render(true); });
   parseRoute(); runHealth(); applyAccent(); render();
   if (S.settings.firstRun) { store.setSettings({ firstRun: false }); welcome(); }
 }
@@ -68,43 +73,62 @@ function parseRoute() {
 
 function renderSide() {
   const e = store.activeEntity();
+  const keep = side.scrollTop; /* rebuilding must not jump the menu back to the top */
   add(clear(side), 
     h('div.brand', h('div.brand-mark', '₹'), h('div', h('b', 'DoctorWealth'), h('small', 'Books · v' + store.APP_VERSION))),
-    h('button.ent-switch', { onclick: switchEntity, title: 'Switch entity (F3)' }, h('span.ent-dot', { style: { background: e.accent } }), h('span', e.name), h('span.k', 'F3')),
+    h('button.ent-switch', { onclick: switchEntity, title: 'Switch person (F3)' }, h('span.ent-dot', { style: { background: e.accent } }), h('span', e.name), h('span.k', 'F3')),
     NAV.map(([grp, items]) => h('div.nav-group', h('h6', grp), items.map(([name, ic, label, kbd]) =>
       h('button.nav-item' + (route.name === name ? '.on' : ''), { onclick: () => go(name), 'aria-current': route.name === name ? 'page' : null }, h('span.ic', ic), label, kbd ? h('span.kbd', kbd) : null)))),
     h('div.side-foot',
-      h('div', { class: health.ok ? 'health-ok' : 'health-bad', style: { cursor: 'pointer' }, onclick: () => go('health') }, health.ok ? '✓ Books tally' : '⚠ ' + health.issues.length + ' issue(s) — see Health'),
+      h('div', { class: health.ok ? 'health-ok' : 'health-bad', style: { cursor: 'pointer' }, onclick: () => go('health') }, health.ok ? '✓ All totals check out' : '⚠ ' + health.issues.length + ' problem(s) — see Checks'),
       h('div', 'Works offline · data stays on this device')));
+  side.scrollTop = keep;
   document.querySelectorAll('.bottombar [data-r]').forEach(b => b.classList.toggle('on', b.dataset.r === route.name));
 }
 
-function render() {
+/* dataChanged: re-render after a save keeps the scroll position; a new page starts at the top */
+function render(dataChanged = false) {
+  const key = location.hash;
+  const sameRoute = key === lastRouteKey;
+  const y = window.scrollY;
+  lastRouteKey = key;
   renderSide();
   const e = store.activeEntity();
-  const name = route.name;
+  let name = route.name;
+  const ca = name.startsWith('ca-') || name === 'tb';
+  caView(ca);
+  if (name.startsWith('ca-')) name = name.slice(3);
   clear(content);
-  if (e.kind === 'demo') add(content, h('div.demo-banner', h('span', h('b', 'Demo entity'), ' — practice data. Try anything here; your real books are untouched.'), h('span.spacer'), h('button.btn.sm', { onclick: () => switchTo(store.sortedEntities().find(x => x.kind !== 'demo').id) }, 'Switch to my books')));
-  let title = TITLES[name] || '';
+  if (e.kind === 'demo') add(content, h('div.demo-banner', h('span', h('b', 'Demo'), ' — practice data. Try anything here; your real money records are untouched.'), h('span.spacer'), h('button.btn.sm', { onclick: () => switchTo(store.sortedEntities().find(x => x.kind !== 'demo').id) }, 'Go to my records')));
+  if (ca && name !== 'pack') add(content, h('div.note', { style: { marginBottom: '12px' } }, 'Accountant view — formal names and debit / credit, for your CA. ', h('a', { href: '#/ca-pack' }, 'Download everything in one Excel file')));
+  let title = TITLES[route.name] || '';
   try {
     if (name === 'dashboard') renderDashboard(content);
     else if (name === 'daybook') renderDaybook(content, route.args);
     else if (name === 'daily') renderDaily(content);
+    else if (name === 'spouse') renderFamilyMoney(content);
     else if (name === 'ledgers') renderLedgers(content);
-    else if (name === 'ledger') { const l = store.ledger(route.args[0]); title = l ? l.name : 'Ledger'; renderLedger(content, route.args[0]); }
+    else if (name === 'ledger') { const l = store.ledger(route.args[0]); title = l ? l.name : 'Account'; renderLedger(content, route.args[0]); }
+    else if (name === 'pack') renderCaPack(content);
+    else if (name === 'portfolio') renderPortfolio(content);
+    else if (name === 'asset') { const a = store.asset(route.args[0]); title = a ? a.name : 'Investment'; renderAsset(content, route.args[0]); }
+    else if (name === 'gains') renderGains(content);
+    else if (name === 'trading') renderTrading(content);
+    else if (name === 'prices') renderPrices(content);
     else if (REPORTS.has(name)) renderReport(content, name, route.args);
     else if (name === 'import') renderImport(content);
     else if (name === 'settings') renderSettings(content);
     else if (name === 'recurring') renderRecurring(content);
     else if (name === 'health') renderHealth(content, health);
-    else if (name === 'audit') { title = 'Audit trail'; renderAudit(content); }
-    else { title = 'Not found'; add(content, h('div.empty', 'Page not found. ', h('a', { href: '#/dashboard' }, 'Go to dashboard'))); }
+    else if (name === 'audit') { title = 'Change history'; renderAudit(content); }
+    else { title = 'Not found'; add(content, h('div.empty', 'Page not found. ', h('a', { href: '#/dashboard' }, 'Go home'))); }
   } catch (err) {
     console.error(err);
     add(content, h('div.note.bad', 'Something went wrong showing this page: ' + err.message));
   }
   add(clear(titleEl), h('span.ent-dot', { style: { background: e.accent } }), h('span.crumb.hide-phone', e.name + ' ·'), h('span', title));
   document.title = title + ' · ' + e.name + ' · DoctorWealth';
+  if (dataChanged || sameRoute) window.scrollTo(0, y); else window.scrollTo(0, 0);
 }
 
 /* ---------- integrity on open & after every change ---------- */
@@ -123,10 +147,10 @@ export async function switchTo(id) { await store.setSettings({ activeEntityId: i
 function switchEntity() {
   const ents = store.sortedEntities();
   const md = openModal({
-    title: 'Switch entity', sub: 'Each entity is a separate set of books (like Tally companies).',
+    title: 'Whose money?', sub: 'Each person has separate records. Family shows everyone together.',
     body: h('div.cards', ents.map((e, i) => h('button.btn', { style: { justifyContent: 'flex-start', height: '44px' }, autofocus: e.id === S.settings.activeEntityId, onclick: () => { md.close(); switchTo(e.id); } },
       h('span.ent-dot', { style: { background: e.accent } }), e.name, e.kind === 'demo' ? h('span.pill.gold', 'demo') : null, h('span.spacer'), h('span.muted.small', String(i + 1))))),
-    foot: [h('button.btn', { onclick: () => { md.close(); go('family'); } }, 'Family view'), h('button.btn', { onclick: () => { md.close(); go('settings'); } }, 'Manage entities')]
+    foot: [h('button.btn', { onclick: () => { md.close(); go('family'); } }, 'Family view'), h('button.btn', { onclick: () => { md.close(); go('settings'); } }, 'Add or edit people')]
   });
   md.el.addEventListener('keydown', e => { const n = Number(e.key); if (n >= 1 && n <= ents.length) { md.close(); switchTo(ents[n - 1].id); } });
 }
@@ -160,7 +184,7 @@ function openSearch() {
     results = [];
     if (q.length >= 2) {
       const c = store.ctx();
-      for (const l of c.ledgers) if ((l.name + ' ' + l.alias).toLowerCase().includes(q)) results.push({ label: l.name, sub: (c.groupOf(l) || {}).name + ' · ledger', fn: () => go('ledger', l.id) });
+      for (const l of c.ledgers) if ((l.name + ' ' + l.alias).toLowerCase().includes(q)) results.push({ label: l.name, sub: (c.groupOf(l) || {}).name + ' · account', fn: () => go('ledger', l.id) });
       for (const k of Object.keys(TITLES)) if (TITLES[k].toLowerCase().includes(q)) results.push({ label: TITLES[k], sub: 'page', fn: () => go(k) });
       const p = toPaise(q);
       const vs = c.vouchers.filter(v => (v.narration || '').toLowerCase().includes(q) || (v.no || '').toLowerCase().includes(q) || (p && v.lines.some(x => x.dr === p || x.cr === p)))
@@ -189,13 +213,13 @@ function onKey(e) {
   const typing = /^(INPUT|SELECT|TEXTAREA)$/.test(e.target.tagName) || e.target.isContentEditable;
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); if (!modalOpen()) openSearch(); return; }
   if (e.altKey && e.key.toLowerCase() === 'h') { e.preventDefault(); toggleHide(); return; }
-  const fkeys = { F3: () => switchEntity(), F4: () => openEntry('transfer'), F5: () => openEntry('expense'), F6: () => openEntry('income'), F7: () => openEntry('journal') };
+  const fkeys = { F3: () => switchEntity(), F4: () => openEntry('transfer'), F5: () => openEntry('expense'), F6: () => openEntry('income'), F7: () => openEntry('journal') }; /* F7 = accountant entry */
   if (fkeys[e.key]) { e.preventDefault(); if (!modalOpen()) fkeys[e.key](); return; }
   if (typing || modalOpen() || e.ctrlKey || e.metaKey || e.altKey) return;
   const k = e.key.toLowerCase();
   if (gPending && Date.now() - gPending < 1200) {
     gPending = 0;
-    const map = { d: 'dashboard', b: 'daybook', l: 'ledgers', t: 'tb', p: 'pl', s: 'bs', c: 'cf', a: 'analysis', i: 'import', f: 'family', h: 'health' };
+    const map = { d: 'dashboard', b: 'daybook', l: 'ledgers', t: 'tb', p: 'pl', s: 'bs', c: 'cf', a: 'analysis', i: 'import', f: 'family', h: 'health', v: 'portfolio', g: 'gains' };
     if (map[k]) { e.preventDefault(); go(map[k]); }
     return;
   }
@@ -205,17 +229,18 @@ function onKey(e) {
   if (k === '?') { e.preventDefault(); shortcutsHelp(); }
 }
 export function shortcutsHelp() {
-  const rows = [['N / Q', 'Quick add'], ['F6', 'Income (receipt)'], ['F5', 'Expense (payment)'], ['F4', 'Transfer (contra)'], ['F7', 'Journal (pro)'], ['F3', 'Switch entity'],
+  const rows = [['N', 'Add entry'], ['F6', 'Money received'], ['F5', 'Money spent'], ['F4', 'Move money between my accounts'], ['F3', 'Switch person'],
     ['Ctrl+K or /', 'Search'], ['Alt+H', 'Hide / show amounts'], ['Ctrl+Enter', 'Save the open form'], ['Esc', 'Close'],
-    ['G then D/B/L', 'Dashboard / Day book / Ledgers'], ['G then T/P/S/C', 'Trial balance / P&L / Balance sheet / Cash flow'], ['G then A/I/F/H', 'Analysis / Import / Family / Health'], ['?', 'This help']];
+    ['G then D / B / L', 'Home / All entries / Accounts'], ['G then P / S / C', 'Income & spending / What I own & owe / Money in & out'], ['G then A / I / F', 'Breakdown / Import / Family'], ['G then V / G', 'Portfolio / Capital gains'], ['?', 'This help']];
   openModal({ title: 'Keyboard shortcuts', body: h('table.tbl', h('tbody', rows.map(r => h('tr', h('td', h('b', r[0])), h('td', r[1]))))) });
 }
 function welcome() {
   const md = openModal({
     title: 'Welcome to DoctorWealth Books',
-    body: h('div', h('p', 'Double-entry books for You, Spouse and the family — offline, on this device.'),
-      h('ul', h('li', 'You are in the ', h('b', 'Demo'), ' entity with a sample year: try entries, reports and imports freely.'),
-        h('li', 'Your real books are ', h('b', 'You'), ' and ', h('b', 'Spouse'), ', with editable starter ledgers.'),
+    body: h('div', h('p', 'Your family’s money records — income, spending, savings and loans — offline, on this device.'),
+      h('ul', h('li', 'You are in the ', h('b', 'Demo'), ' with a sample year: try adding entries and looking at reports freely.'),
+        h('li', 'Your real records are under ', h('b', 'You'), ' and ', h('b', 'Spouse'), '. Switch with the name at the top of the menu.'),
+        h('li', 'Your CA gets a separate accountant view and a one-click Excel pack under ', h('b', 'For my CA'), '.'),
         h('li', 'Coming from the old DoctorWealth? ', h('b', 'Import → Old DoctorWealth data'), ' brings everything across and checks every balance.'),
         h('li', 'Press ', h('b', '?'), ' any time for keyboard shortcuts.'))),
     foot: [h('button.btn', { onclick: () => { md.close(); go('import'); } }, 'Import old data'), h('button.btn.primary', { onclick: () => md.close() }, 'Explore the demo')]

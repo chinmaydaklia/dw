@@ -311,19 +311,20 @@ export function cashDigital(ctx, { from = '', to = '' } = {}) {
 /* Headline figures for the dashboard. */
 export function headline(ctx, { asOf, from }) {
   const bal = balances(ctx, { to: asOf });
-  const t = { cash: 0, bank: 0, investments: 0, otherAssets: 0, loans: 0, cards: 0, otherLiab: 0 };
+  const t = { cash: 0, bank: 0, wallets: 0, investments: 0, otherAssets: 0, loans: 0, cards: 0, otherLiab: 0 };
   for (const l of ctx.ledgers) {
     const c = bal.get(l.id).closing; if (!c) continue;
     const g = ctx.groupOf(l) || {};
     if (g.nature === 'cash') t.cash += c;
     else if (g.nature === 'bank') t.bank += c;
+    else if (g.nature === 'wallet') t.wallets += c;
     else if (g.nature === 'investment') t.investments += c;
     else if (g.root === 'asset') t.otherAssets += c;
     else if (g.nature === 'loan') t.loans += -c;
     else if (g.nature === 'card') t.cards += -c;
     else if (g.root === 'liability') t.otherLiab += -c;
   }
-  t.assets = t.cash + t.bank + t.investments + t.otherAssets;
+  t.assets = t.cash + t.bank + t.wallets + t.investments + t.otherAssets;
   t.liabilities = t.loans + t.cards + t.otherLiab;
   t.netWorth = t.assets - t.liabilities;
   const pl = profitLoss(ctx, { from, to: asOf });
@@ -341,7 +342,7 @@ export function family(ctxs, { asOf, from }) {
     return { entity: ctx.entity, ...h, inter };
   });
   const sumK = k => per.reduce((t, p) => t + p[k], 0);
-  const keys = ['cash', 'bank', 'investments', 'otherAssets', 'loans', 'cards', 'otherLiab', 'income', 'expense', 'surplus'];
+  const keys = ['cash', 'bank', 'wallets', 'investments', 'otherAssets', 'loans', 'cards', 'otherLiab', 'income', 'expense', 'surplus'];
   const total = Object.fromEntries(keys.map(k => [k, sumK(k)]));
   const inter = sumK('inter');
   total.netWorth = sumK('netWorth') - inter; /* inter-entity balances cancel out on consolidation */

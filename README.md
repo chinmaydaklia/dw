@@ -1,9 +1,100 @@
-# DoctorWealth Books — Phase 1
+# DoctorWealth Books — Phases 1 & 2
 
-Offline, Tally-like double-entry accounts for a doctor's family, rebuilt from the DoctorWealth blueprint.
+Money records for a doctor's family, rebuilt from the DoctorWealth blueprint. It is offline and written in **plain language**: accounts,
+categories, money in / money out, what I own & owe. Correct double entry runs underneath, and a separate **For my CA**
+section shows the formal accounting view and builds a one-click Excel pack for the accountant.
 Plain JavaScript (ES modules, no framework, no build step). Data lives in this browser's IndexedDB.
 
+## Plain language vs the CA view
+
+| You see | Your CA sees (For my CA, or Settings → "Accountant words everywhere") |
+|---|---|
+| Account / category | Ledger |
+| Section | Group |
+| Entry · Money in / Money out / Transfer / Adjustment | Voucher · Receipt / Payment / Contra / Journal |
+| From → To | Credit → Debit |
+| Income & spending · Saved this year | Profit & loss · Surplus |
+| What I own & owe · My net worth | Balance sheet · Capital account |
+| To sort later · Bills to pay · Starting net worth | Suspense · Sundry payables · Capital (opening) |
+
+**For my CA** has the trial balance, P&L, balance sheet, day book with Dr/Cr, ledgers & groups, and a **CA pack**. The pack is one Excel file with:
+- trial balance, P&L and balance sheet
+- day book and ledger-wise entries
+- TDS for matching with 26AS
+- cash vs digital receipts
+- family transfers
+- chart of accounts with section numbers
+
+## Money with family
+
+The **Money with family** screen records cash or bank money between You and Spouse (either direction) in both people's records at once.
+
+- **Gift — not to be returned:** not income or spending for either person. In accounting terms it is drawings for the giver and capital introduced for the receiver.
+- **To be returned:** a running "who owes whom" total, which cancels out in the Family view.
+
+Editing or deleting a transfer changes both sides.
+
 **Phase 1 scope:** entities, masters, entry and core reports, plus the file imports from the old app.
+
+## Phase 2 — Investments
+
+Investments are ordinary entries (buy, sell, dividend, deposit, withdrawal) that carry the investment details. Holdings, FIFO lots and capital gains are worked out from those entries, so the portfolio always agrees with the main records.
+
+- **Types:** listed shares, equity / debt / gold mutual funds and ETFs, SGB, physical / digital gold, crypto, bonds, unlisted shares, property, FD, PPF, NPS. The type decides the tax treatment.
+- **Buy:** quantity, price and charges (charges are added to cost). For a SIP you can save without units and fill them in later.
+- **Sell:** a live FIFO preview shows which purchase lots are used. The profit is split automatically into short and long term, and booked to separate profit accounts (equity ST / LT, other ST / LT, crypto).
+- **Past holdings:** "Already own some" adds purchase lots from before you started using the app. The Portfolio flags any account whose balance does not match its investments, with a one-click fix.
+- **Splits and bonuses:** a bonus is a new lot dated on the allotment day at zero cost.
+- **Grandfathering:** for equity bought before February 2018, the 31 Jan 2018 value is used.
+- **FD / PPF / NPS:** deposits, interest (paid out or added to the investment), withdrawal and closing. The FD value is estimated with quarterly compounding.
+- **Capital gains report:** works by tax year.
+  - Equity: 20% short term; 12.5% long term above ₹1.25 lakh.
+  - Other assets: short term at your slab rate; 12.5% long term without indexation.
+  - Crypto: flat 30%, and losses are never set off.
+  - Set-off order: short-term losses against any gain, long-term losses only against long-term gains. Losses to carry forward are shown, along with a tax estimate.
+  - The rules live in `js/core/taxrules.js`, one table per tax year.
+- **Prices:** entered by you by default (offline). An optional online fetch can be switched on in Settings: mutual fund NAV from mfapi.in and crypto from CoinGecko. The Zerodha holdings import updates share prices and adds missing shares to the Portfolio.
+- **F&O / intraday:** a result per day or per month, with charges, STT and option premium. Turnover is |profit| + |loss| + premium received, with an audit-limit flag. F&O counts as business income and intraday as speculative.
+- **CA pack:** adds Capital gains (FIFO lines with ISIN and dates), Holdings and F&O sheets.
+
+### Money into investments — counted once
+
+- **Broker & wallet money** (Zerodha wallet, CoinDCX INR wallet) is a money account, like a bank account.
+  - **Bank → wallet** is a transfer: nothing is invested yet, and net worth does not change.
+  - **Wallet → shares / funds**, or **bank → shares / funds directly**, is a Buy. That is the only investment entry.
+- **Statement import** recognises Zerodha / CoinDCX / Groww / Upstox transfers ("to wallet") and mutual-fund payments (BSE / ICCL / CAMS / KFin / MF SIP), so they are not booked as spending.
+- **Linking instead of re-entering:**
+  - **Buy** spots money already recorded (same amount within 5 days, for example from a statement import) and offers to link that entry.
+  - **Portfolio** lists every payment into or out of an investment account that is not linked yet, with **Link now**. Linking a payment out of an account works it out as a sale with FIFO profit.
+  - Linking adds the investment details to the existing entry; it never adds a second one.
+- **Zerodha holdings import** asks whether new shares were owned before you started (starting balance) or bought recently with wallet / bank money (recorded as purchases).
+- **Portfolio warns** when a wallet goes below zero, meaning money put into it is missing.
+- **Upgrading** (data schema v4) moves existing Zerodha / wallet accounts into the new section. The old app's "investment" accounts (Kite Wallet, CoinDCX) also migrate as wallets.
+
+### Zerodha P&L import
+
+Import → **Zerodha P&L** reads either file from Zerodha Console.
+
+**Tax P&L** (`taxpnl-….xlsx`, with its "Tradewise Exits" sheet) — recommended, because it has buy and sell dates:
+- Each share / fund exit becomes a sale in Portfolio, with FIFO cost and the profit split short / long term.
+  - If Portfolio already holds the shares, only the sale is added, using your own purchases.
+  - Otherwise the purchase is added too, paid from the Zerodha wallet.
+  - You can switch each row between the two in the review screen.
+- Brokerage and exchange charges reduce the sale value. STT on share sales is recorded separately, because it is not deductible against capital gains.
+- F&O and intraday trades become one trading result per day per segment, with charges, STT and Zerodha's turnover.
+- The yearly summary (gains, F&O, dividends) can be saved for the tax phase at the same time.
+- Re-importing the same file flags every row as already imported.
+
+**Console P&L** (no dates): F&O / intraday totals are added as one trading result. For shares, the Tax P&L file is needed because short / long term depends on dates.
+
+Every Zerodha P&L import goes through review first and can be undone from Import history; undoing also removes any investments it created.
+
+**Detailed income / spending:** alongside quick entry, "Detailed income" and "Detailed expense" record more:
+- who paid or was paid, and how (cash / UPI / card / bank transfer / cheque)
+- reference number and bill / receipt number
+- GST and supplier GSTIN, for expenses
+
+These details are searchable in All entries and included in the CA pack's day book. A cheque that is not account-payee counts as cash for the presumptive-tax limit. Settings can make the detailed form the default.
 
 ## Run it
 
@@ -21,7 +112,7 @@ browser storage, so the old data can be read and migrated in one click.
 
 | Area | Delivered |
 |---|---|
-| Entities | You, Spouse and a deletable Demo entity with a sample year. Add more (HUF, parents…) and switch with F3, like Tally companies. Every record points to a permanent id, so renaming never breaks history. Each entity has its own accent colour. A family view sits on top. |
+| People | You, Spouse and a deletable Demo entity with a sample year. Add more (HUF, parents…) and switch with F3, like Tally companies. Every record points to a permanent id, so renaming never breaks history. Each entity has its own accent colour. A family view sits on top. |
 | Accounting model | Balanced double entry. Amounts are integer paise. Opening capital is the balancing figure, so books always open balanced. Every create/edit/delete goes into an audit trail (with restore). Finished financial years can be locked. |
 | Masters | Five root types (asset, liability, capital, income, expense). Tally-style groups, with editable starter ledgers for You (PNH, DKM, Clinic, Arihant loan, TDS receivable…) and Spouse. Every ledger has a tax tag with stable keys, and section numbers sit in a lookup table by tax year (44ADA → 58 for 2026-27). Sites (PNH/DKM/Clinic), owner tags and free custom tags are supported. Masters can be copied between entities. |
 | Entry | Quick one-line entry (`450 petrol sbi`, `+18k pnh`, `5000 sbi to cash`, `y 1200 groceries card`). Simple screens for Income (with TDS and a cash/digital split), Expense (split across ledgers), Transfer, Investment, Loan (EMI principal/interest, loans given and recovered) and the clinic/hospital daily summary (cash, UPI/card and patient count; no patient names). There is also a multi-day daily grid. Recurring entries are never posted silently, and any entry can be saved as a shortcut. Pro-mode journal with raw Dr/Cr. |
@@ -65,6 +156,5 @@ tests/      node --test suites
 
 ## Next phases
 
-2. Investments: lots, FIFO capital gains, SIPs, prices.
 3. Tax engine: Sec 58 / 44ADA vs actual, regimes, advance tax, ITR-3 schedules, 26AS/AIS.
 4. Imports & sync: Zerodha tradebook, MF/CoinDCX/AIS, device change-file sync, PIN and encryption.

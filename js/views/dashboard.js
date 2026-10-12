@@ -19,18 +19,18 @@ export function renderDashboard(root) {
   add(root, h('div.card', { style: { marginBottom: '14px' } }, h('div.card-b', { style: { paddingTop: '12px' } }, qb)));
 
   add(root, h('div.kpis',
-    kpi('Net worth', amt(hd.netWorth), `Assets ${money(hd.assets, { compact: true })} · Liabilities ${money(hd.liabilities, { compact: true })}`, () => go('bs')),
-    kpi('Cash & bank', amt(hd.cash + hd.bank), `Cash ${money(hd.cash, { compact: true })} · Bank ${money(hd.bank, { compact: true })}`, () => go('ledgers')),
-    kpi('Income · ' + p.label, amt(hd.income, { cls: 'in' }), `Expenses ${money(hd.expense, { compact: true })} · Surplus ${money(hd.surplus, { compact: true, sign: true })}`, () => go('pl')),
-    kpi('Professional receipts', amt(hd.prof.receipts), `Net of professional expenses ${money(hd.prof.net, { compact: true })}`, () => go('cash'))));
+    kpi('Net worth', amt(hd.netWorth), `Own ${money(hd.assets, { compact: true })} · Owe ${money(hd.liabilities, { compact: true })}`, () => go('bs')),
+    kpi('Cash & bank', amt(hd.cash + hd.bank + hd.wallets), `Cash ${money(hd.cash, { compact: true })} · Bank ${money(hd.bank, { compact: true })}` + (hd.wallets ? ` · Wallets ${money(hd.wallets, { compact: true })}` : ''), () => go('ledgers')),
+    kpi('Income · ' + p.label, amt(hd.income, { cls: 'in' }), `Spent ${money(hd.expense, { compact: true })} · Saved ${money(hd.surplus, { compact: true, sign: true })}`, () => go('pl')),
+    kpi('Practice income', amt(hd.prof.receipts), `After practice expenses ${money(hd.prof.net, { compact: true })}`, () => go('cash'))));
 
   /* alerts */
   const alerts = [];
   const due = S.recurring.filter(r => r.entityId === c.entity.id).map(r => ({ r, n: dueDates(r, t).length })).filter(x => x.n);
-  if (due.length) alerts.push(h('div.note.warn', '↻ ' + due.reduce((s2, x) => s2 + x.n, 0) + ' recurring entr' + (due.length === 1 && due[0].n === 1 ? 'y is' : 'ies are') + ' due (' + due.map(x => x.r.name).join(', ') + '). ', h('a', { href: '#/recurring' }, 'Review & post')));
+  if (due.length) alerts.push(h('div.note.warn', '↻ ' + due.reduce((s2, x) => s2 + x.n, 0) + ' repeating entr' + (due.length === 1 && due[0].n === 1 ? 'y is' : 'ies are') + ' due (' + due.map(x => x.r.name).join(', ') + '). ', h('a', { href: '#/recurring' }, 'Check & add')));
   const susp = c.ledgers.find(l => l.system === 'suspense');
-  if (susp) { const b = balances(c).get(susp.id).closing; if (b) alerts.push(h('div.note.warn', 'Suspense has a balance of ' + money(Math.abs(b)) + ' — imported rows still to classify. ', h('a', { href: '#/ledger/' + susp.id }, 'Open Suspense'))); }
-  if (!S.settings.lastBackupAt && c.vouchers.length && c.entity.kind !== 'demo') alerts.push(h('div.note', 'Tip: download a backup (Settings → Backup) and keep it somewhere safe.'));
+  if (susp) { const b = balances(c).get(susp.id).closing; if (b) alerts.push(h('div.note.warn', money(Math.abs(b)) + ' of imported entries still need a category. ', h('a', { href: '#/ledger/' + susp.id }, 'Sort them now'))); }
+  if (!S.settings.lastBackupAt && c.vouchers.length && c.entity.kind !== 'demo') alerts.push(h('div.note', 'Tip: download a backup (Settings & backup) and keep it somewhere safe.'));
   if (alerts.length) add(root, h('div.cards', { style: { marginBottom: '14px' } }, alerts));
 
   /* charts */
@@ -39,7 +39,7 @@ export function renderDashboard(root) {
   const data = months.map(k => ({ label: fmtMonth(k).slice(0, 3), a: (byM.get(k) || {}).income || 0, b: (byM.get(k) || {}).expense || 0 }));
   const nw = netWorthSeries(c, { from: p.from, to }).map(x => ({ label: fmtMonth(x.month), value: x.value }));
   add(root, h('div.two',
-    h('div.card', h('div.card-h', h('h3', 'Income and expenses by month'), h('span.sub', p.label)), h('div.card-b', barChart(data, ['Income', 'Expenses']))),
+    h('div.card', h('div.card-h', h('h3', 'Income and spending by month'), h('span.sub', p.label)), h('div.card-b', barChart(data, ['Income', 'Spending']))),
     h('div.card', h('div.card-h', h('h3', 'Net worth'), h('span.sub', 'month end')), h('div.card-b', lineChart(nw)))));
 
   /* sites + cash share + recent */
@@ -47,15 +47,15 @@ export function renderDashboard(root) {
   const cd = cashDigital(c, { from: p.from, to });
   const recent = dayBook(c, { to: t }).slice(0, 8);
   add(root, h('div.two', { style: { marginTop: '14px' } },
-    h('div.card', h('div.card-h', h('h3', 'Recent entries'), h('span.spacer'), h('a.small', { href: '#/daybook' }, 'Day book →')),
+    h('div.card', h('div.card-h', h('h3', 'Recent entries'), h('span.spacer'), h('a.small', { href: '#/daybook' }, 'All entries →')),
       h('div.card-b', recent.length ? h('table.tbl', h('tbody', recent.map(v => h('tr.click', { onclick: () => openVoucher(v.id) }, h('td.nowrap', fmtDate(v.date)), h('td', v.narration || ((c.lById.get((v.lines.find(l => !c.isMoney(l.ledgerId)) || v.lines[0]).ledgerId) || {}).name || '—'), h('div.narr', v.no)), h('td.r', amt(flow(c, v), { flow: true }))))))
-        : h('div.empty', 'No entries yet. Use the quick entry above, or ', h('a', { href: '#', onclick: e => { e.preventDefault(); openEntry('income'); } }, 'add income'), '.'))),
+        : h('div.empty', 'Nothing yet. Type in the quick entry box above, or ', h('a', { href: '#', onclick: e => { e.preventDefault(); openEntry('income'); } }, 'add money received'), '.'))),
     h('div.cards',
-      h('div.card', h('div.card-h', h('h3', 'Receipts by site'), h('span.sub', p.label)), h('div.card-b', sites.length ? h('table.tbl', h('tbody', sites.map(r => h('tr', h('td', r.key), h('td.r.muted.small', r.visits ? r.visits + ' patients' : ''), h('td.r', amt(r.income)))))) : h('div.muted.small', 'No income yet.'))),
-      h('div.card', h('div.card-h', h('h3', 'Cash share of professional receipts')), h('div.card-b',
+      h('div.card', h('div.card-h', h('h3', 'Income by site'), h('span.sub', p.label)), h('div.card-b', sites.length ? h('table.tbl', h('tbody', sites.map(r => h('tr', h('td', r.key), h('td.r.muted.small', r.visits ? r.visits + ' patients' : ''), h('td.r', amt(r.income)))))) : h('div.muted.small', 'No income yet.'))),
+      h('div.card', h('div.card-h', h('h3', 'Cash share of practice income')), h('div.card-b',
         h('div.meter', { role: 'meter', 'aria-valuenow': Math.round(cd.cashPct * 100), 'aria-valuemin': 0, 'aria-valuemax': 100 }, h('i', { style: { width: Math.min(100, cd.cashPct * 100).toFixed(1) + '%' } })),
         h('div.small', { style: { marginTop: '6px' } }, (cd.cashPct * 100).toFixed(1) + '% cash · ' + money(cd.cash) + ' of ' + money(cd.total)),
-        h('div.small.muted', 'The higher presumptive limit (₹75 lakh) needs cash receipts at most 5%. Live tax estimate arrives with the tax engine (Phase 3).'))))));
+        h('div.small.muted', 'Keep cash at 5% or less to use the higher ₹75 lakh limit of the simple tax option. Live tax estimate comes in the tax phase.'))))));
 }
 function kpi(label, val, foot, onclick) { return h('div.card.kpi', { onclick, style: { cursor: 'pointer' }, title: 'Open report' }, h('div.lbl', label), h('div.val', val), h('div.foot', foot)); }
 function go(r) { location.hash = '#/' + r; }
