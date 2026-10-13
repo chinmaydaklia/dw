@@ -165,14 +165,22 @@ export function groupPdfItems(items) {
       } else { cell = { t: t.s, x0: t.x, x1: t.x + t.w, gapSpace: false }; cells.push(cell); }
     }
     for (const c of cells) c.t = c.t.replace(/\s+/g, ' ').trim();
-    if (cells.length) out.push({ y: L.y, cells });
+    if (cells.length) out.push({ y: L.y, h: L.h, cells });
   }
   return out;
 }
-const PDF_JUNK = /page\s*\d+\s*(of|\/)\s*\d+|statement of account|computer generated|does not require|generated on|^page\s*\d+$|customer care|registered office|www\.|toll free|^\*+|end of statement|abbreviations/i;
+const PDF_JUNK = /page\s*\d+\s*(of|\/)\s*\d+|statement of account|computer generated|computer-generated|discrepancy|^note\s*:|in case you find|contents of this statement|cyber crime|helpline|^\*?all dates are|does not require|generated on|^page\s*\d+$|customer care|registered office|www\.|toll free|^\*+|end of statement|abbreviations/i;
 
 function signed(a) { return (a.side === 'dr' || a.neg) ? -a.p : a.p; }
+/* "-", "0", "0.00", "NA" placeholders in empty columns (SBI prints 0 in the unused Credit/Debit column) */
+function isFiller(t) { return /^(-+|0|0\.00|nil|na)$/i.test(String(t).replace(/\s/g, '')); }
+/* "30-08-2026 UPI/2258..." (value date glued to the description) -> "UPI/2258..." */
+function stripLeadDate(t) { const m = /^(\d{1,2}[/\-.]\d{1,2}[/\-.]\d{2,4}|\d{1,2}[\s-][A-Za-z]{3}[\s-]\d{2,4})\s+(\S[\s\S]*)$/.exec(t); return (m && parseDateAny(m[1])) ? m[2] : t; }
 function leadingDate(cells) {
+  /* skip a leading serial-number cell (Bank of Baroda: "Serial No | Transaction Date | ...") */
+  if (cells.length > 1 && /^\d{1,4}\.?$/.test(cells[0].t) && parseDateAny(cells[1].t)) {
+    const r0 = leadingDate(cells.slice(1)); if (r0.date) { r0.used += 1; return r0; }
+  }
   for (let n = 1; n <= 3 && n <= cells.length; n++) {
     const s = cells.slice(0, n).map(c => c.t).join(' ');
     const d = parseDateAny(s);
@@ -204,11 +212,58 @@ function assignAmounts(t, amts, head) {
   }
   if (t.debit) t.hint = 'debit'; else if (t.credit) t.hint = 'credit';
 }
+/* A PDF may hold several accounts (Bank of Baroda e-statement: savings + each loan).
+   Split at "Statement of transactions in <type> Account <no>" and parse each part on its own. */
+const SECTION_RE = /statement of transactions in\s+(?:the\s+)?([a-z ]*?)\s*a\/?c(?:count)?\s*(?:no\.?\s*)?[:-]?\s*([0-9xX*]{6,})/i;
 export function parsePdfStatement(pages) {
   const lines = [];
   pages.forEach((pg, p) => pg.forEach(ln => { ln.page = p; lines.push(ln); }));
-  let head = null, allText = '';
+  let allText = '';
   for (let i = 0; i < lines.length && i < 400; i++) allText += ' ' + lines[i].cells.map(c => c.t).join(' ');
+  const bank = detectBank(allText);
+  const secs = [{ kind: 'main', acct: '', lines: [] }];
+  for (const ln of lines) {
+    const m = SECTION_RE.exec(ln.cells.map(c => c.t).join(' '));
+    if (m) { secs.push({ kind: /loan/i.test(m[1]) ? 'loan' : 'deposit', acct: m[2], lines: [] }); continue; }
+    secs[secs.length - 1].lines.push(ln);
+  }
+  if (secs.length === 1) return parsePdfLines(lines, bank);
+  let main = null, firstErr = null; const loans = [];
+  for (const sct of secs) {
+    if (!sct.lines.length) continue;
+    const r = parsePdfLines(sct.lines, bank);
+    if (sct.kind === 'loan') { if (!r.error) { r.acct = sct.acct; r.detail = loanDetailFrom(sct.lines); loans.push(r); } continue; }
+    if (r.error) { if (!firstErr) firstErr = r; continue; }
+    if (!main) { main = r; main.acct = sct.acct; }
+  }
+  if (!main) return firstErr || { error: 'No savings/current account transactions found in this PDF.' };
+  main.loans = loans;
+  return main;
+}
+/* "SANCTIONED DATE | SANCTIONED AMOUNT | EMI | TENURE | ROI (%) | ..." header with the values on the next line */
+export function loanDetailFrom(lines) {
+  for (let i = 0; i + 1 < lines.length; i++) {
+    const h = lines[i].cells, txt = h.map(c => c.t).join(' ');
+    if (!/\bemi\b/i.test(txt) || !/roi|rate/i.test(txt)) continue;
+    let vals = lines[i + 1].cells;
+    if (i + 2 < lines.length && !/\d/.test(vals.map(c => c.t).join(''))) vals = lines[i + 2].cells;
+    const out = {};
+    for (const hc of h) {
+      const name = hc.t.toLowerCase(), cx = (hc.x0 + hc.x1) / 2; let best = null, bd = 1e9;
+      for (const v of vals) { const d = Math.abs((v.x0 + v.x1) / 2 - cx); if (d < bd) { bd = d; best = v.t; } }
+      if (best === null) continue;
+      if (/^emi$/.test(name)) out.emi = toPaise(best) || 0;
+      else if (/roi|rate/.test(name)) out.rate = parseFloat(best);
+      else if (/sanctioned amount|loan amount/.test(name)) out.sanctioned = toPaise(best) || 0;
+      else if (/tenure/.test(name)) out.tenure = parseInt(best, 10);
+      else if (/next emi|next due/.test(name)) out.nextDue = parseDateAny(best);
+    }
+    return out;
+  }
+  return {};
+}
+function parsePdfLines(lines, bank) {
+  let head = null;
   const headerFrom = cells => {
     const col = {};
     for (const c of cells) { const kind = headerKind(c.t); if (kind && !col[kind]) col[kind] = { x0: c.x0, x1: c.x1, c: (c.x0 + c.x1) / 2 }; }
@@ -216,21 +271,39 @@ export function parsePdfStatement(pages) {
   };
   const isHeaderLine = ln => { const c = headerFrom(ln.cells); return !!(c.date && (c.debit || c.credit || c.amount)); };
   for (let i = 0; i < lines.length && !head; i++) { const c1 = headerFrom(lines[i].cells); if (c1.date && (c1.debit || c1.credit)) head = c1; }
+  /* two-line headers ("Transaction" / "Date") only if no single line qualifies */
   for (let i = 0; i + 1 < lines.length && !head; i++) {
     if (lines[i + 1].page !== lines[i].page) continue;
     const na = Object.keys(headerFrom(lines[i].cells)).length, nb = Object.keys(headerFrom(lines[i + 1].cells)).length;
-    if (na < 2 || nb < 2) continue;
+    if (na < 2 || nb < 1) continue;
     const c2 = headerFrom(lines[i].cells.concat(lines[i + 1].cells));
     if (c2.date && c2.debit && c2.credit) head = c2;
   }
   const txns = [], meta = { opening: null, closing: null };
-  let cur = null, contCount = 0, pendingClosingLabel = false;
+  let cur = null, contCount = 0, pendingClosingLabel = false, orphans = [], inTable = !head;
+  /* Description lines without date/amount belong to whichever transaction row they sit nearest:
+     HDFC wraps text BELOW its row, SBI prints it ABOVE the vertically centred date. */
+  const placeOrphans = t => {
+    const prev = txns.length ? txns[txns.length - 1] : null, before = [];
+    for (const o of orphans) {
+      const up = (prev && prev.page === o.page) ? Math.abs(prev.y - o.y) : 1e9, down = (t.page === o.page) ? Math.abs(o.y - t.y) : 1e9;
+      if (Math.min(up, down) > o.h * 2.6) continue; /* too far from any row: page text, not a description */
+      if (down < up) before.push(o.text); else if (prev) prev.narration += ' ' + o.text;
+    }
+    if (before.length) t.narration = before.join(' ') + (t.narration ? ' ' + t.narration : '');
+    orphans = [];
+  };
+  const flushOrphans = () => {
+    const prev = txns.length ? txns[txns.length - 1] : null;
+    for (const o of orphans) if (prev && prev.page === o.page && Math.abs(prev.y - o.y) <= o.h * 2.6) prev.narration += ' ' + o.text;
+    orphans = [];
+  };
   for (const L of lines) {
     const cells = L.cells, text = cells.map(c => c.t).join(' '), lt = text.toLowerCase();
-    if (isHeaderLine(L) || (head && /\b(narration|particulars|description)\b/i.test(text) && /balance/i.test(text))) { cur = null; continue; }
+    if (isHeaderLine(L) || (head && /\b(narration|particulars|description)\b/i.test(text) && /balance/i.test(text))) { flushOrphans(); cur = null; inTable = true; continue; }
     const amts = [];
     for (let j = 0; j < cells.length; j++) {
-      let ct = cells[j].t;
+      let ct = cells[j].t.replace(/^(₹|rs\.?|inr)\s*/i, '');
       if (j + 1 < cells.length && /^(cr|dr)\.?$/i.test(cells[j + 1].t) && AMT_RE.test(ct)) { ct = ct + ' ' + cells[j + 1].t; cells[j + 1].used = true; }
       if (AMT_RE.test(ct)) { const aw = amtWithSide(ct); amts.push({ p: Math.abs(aw.p), neg: aw.p < 0, side: aw.side, x0: cells[j].x0, x1: cells[j].x1, idx: j }); cells[j].amt = true; }
     }
@@ -243,37 +316,47 @@ export function parsePdfStatement(pages) {
       if (amts.length >= 2) { meta.closing = signed(amts[amts.length - 1]); if (pendingClosingLabel === 'both') meta.opening = signed(amts[0]); }
       pendingClosingLabel = false; if (amts.length && !leadingDate(cells).date) continue;
     }
-    if (/opening\s*bal|balance\s*b\/?f|brought forward|balance as on|balance as of/.test(lt) && !leadingDate(cells).date) {
+    /* opening balance, also when it is a dated row (Bank of Baroda "1 | 30-08-2026 | Opening Balance") */
+    if (/opening\s*bal|balance\s*b\/?f|brought forward|balance as on|balance as of/.test(lt) && (!leadingDate(cells).date || /opening\s*bal|brought forward|b\/f/.test(lt))) {
       if (amts.length && meta.opening === null) meta.opening = signed(amts[amts.length - 1]);
       cur = null; continue;
     }
     const ld = leadingDate(cells);
+    if (!inTable) continue; /* account summaries / loan-detail rows above the table are not transactions */
     if (ld.date && amts.length) {
-      const t = { date: ld.date, narration: '', debit: 0, credit: 0, balance: null, hint: '', page: L.page };
+      const t = { date: ld.date, narration: '', debit: 0, credit: 0, balance: null, hint: '', page: L.page, y: L.y };
       const narr = []; if (ld.rest) narr.push(ld.rest);
-      for (let j = ld.used; j < cells.length; j++) { if (cells[j].amt || cells[j].used) continue; if (parseDateAny(cells[j].t) && cells[j].t.length <= 12) continue; narr.push(cells[j].t); }
+      for (let j = ld.used; j < cells.length; j++) { if (cells[j].amt || cells[j].used || isFiller(cells[j].t)) continue; if (parseDateAny(cells[j].t) && cells[j].t.length <= 12) continue; narr.push(stripLeadDate(cells[j].t)); }
       t.narration = narr.join(' ');
       assignAmounts(t, amts, head);
-      if (t.debit || t.credit || t.amt) { txns.push(t); cur = t; contCount = 0; } else cur = null;
+      if (t.debit || t.credit || t.amt) { placeOrphans(t); txns.push(t); cur = t; contCount = 0; } else cur = null;
       continue;
     }
+    if (ld.date && !amts.length && ld.used === cells.length && !ld.rest && cur && !cur.pending && cur.page === L.page && Math.abs(cur.y - L.y) <= (L.h || 8) * 2.6) {
+      cur.narration += ' ' + text; contCount++; continue; /* wrapped description that is just a date ("...to" / "31-07-2026") */
+    }
     if (ld.date && !amts.length) {
-      cur = { date: ld.date, narration: (ld.rest ? ld.rest + ' ' : '') + cells.slice(ld.used).map(c => c.t).join(' '), debit: 0, credit: 0, balance: null, pending: true };
+      cur = { date: ld.date, narration: (ld.rest ? ld.rest + ' ' : '') + cells.slice(ld.used).filter(c => !isFiller(c.t)).map(c => c.t).join(' '), debit: 0, credit: 0, balance: null, pending: true, page: L.page, y: L.y };
       contCount = 0; continue;
     }
     if (!ld.date && amts.length && cur && cur.pending) {
-      const nar2 = cells.filter(c => !c.amt && !c.used).map(c => c.t);
+      const nar2 = cells.filter(c => !c.amt && !c.used && !isFiller(c.t)).map(c => c.t);
       if (nar2.length) cur.narration += ' ' + nar2.join(' ');
       assignAmounts(cur, amts, head); delete cur.pending;
-      if (cur.debit || cur.credit || cur.amt) { txns.push(cur); contCount = 0; } else cur = null;
+      if (cur.debit || cur.credit || cur.amt) { placeOrphans(cur); txns.push(cur); contCount = 0; } else cur = null;
       continue;
     }
-    if (!ld.date && !amts.length && cur && !PDF_JUNK.test(text) && contCount < 4) { cur.narration += ' ' + text; contCount++; continue; }
-    if (PDF_JUNK.test(text)) cur = null;
+    if (!ld.date && !amts.length && (cur || meta.opening !== null) && !PDF_JUNK.test(text) && contCount < 4) {
+      if (cur && cur.pending) cur.narration += ' ' + text;
+      else orphans.push({ text: cells.filter(c => !isFiller(c.t)).map(c => c.t).join(' '), y: L.y, page: L.page, h: L.h || 8 });
+      contCount++; continue;
+    }
+    if (PDF_JUNK.test(text)) { flushOrphans(); cur = null; }
   }
-  for (const t of txns) t.narration = t.narration.replace(/\s+/g, ' ').trim();
+  flushOrphans();
+  for (const t of txns) { t.narration = t.narration.replace(/\s+/g, ' ').trim(); delete t.y; }
   if (!txns.length) return { error: 'No transactions recognised in this PDF. If it is a scanned image (not text), download the CSV/Excel version from net banking instead.' };
-  return finalizeTxns(txns, meta, detectBank(allText));
+  return finalizeTxns(txns, meta, bank);
 }
 
 /* Date order, settle debit/credit using the running balance, opening/closing, and the statement's own arithmetic check. */
