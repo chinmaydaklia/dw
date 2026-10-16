@@ -1,5 +1,5 @@
 /* Statement import planning: parsed rows -> review rows (rules, duplicates) -> vouchers. Pure. */
-import { fingerprint, normNarr, uid, nowISO } from '../lib/util.js';
+import { fingerprint, normNarr, uid, nowISO, clone } from '../lib/util.js';
 import { addDays } from '../lib/dates.js';
 import { lineAmt } from '../core/books.js';
 import { newVoucher, tidyLines, inferType } from '../core/vouchers.js';
@@ -29,7 +29,8 @@ function fpIndex(ctx, ledgerId) {
   for (const v of ctx.vouchers) {
     for (const ln of v.lines) {
       if (ln.ledgerId !== ledgerId) continue;
-      const fp = v.fp && v.fpLedger === ledgerId ? v.fp : fingerprint(ledgerId, v.date, lineAmt(ln), v.narration);
+      const own = (v.fps || []).find(x => x.l === ledgerId);
+      const fp = own ? own.fp : v.fp && v.fpLedger === ledgerId ? v.fp : fingerprint(ledgerId, v.date, lineAmt(ln), v.narration);
       if (!idx.has(fp)) idx.set(fp, []);
       idx.get(fp).push(v);
     }
@@ -62,6 +63,11 @@ export function planRows(ctx, ledgerId, parsed, rules, suspenseId, autoMap = nul
       const lo = addDays(t.date, -3), hi = addDays(t.date, 3);
       const m = soft.find(v => v.date >= lo && v.date <= hi && !v.batchId && v.lines.some(l => l.ledgerId === ledgerId && lineAmt(l) === signedAmt));
       if (m) r.soft = { voucher: m };
+      else {
+        /* the same money already imported from ANOTHER of your accounts (same UPI / UTR reference) -> one transfer */
+        const pair = findOwnTransfer(ctx, ledgerId, t.date, signedAmt, t.narration);
+        if (pair) { r.pair = pair; r.counterId = pair.moneyId; r.hint = 'own'; }
+      }
     }
     if (!seen.has(fp)) seen.set(fp, r.n);
     return r;
@@ -84,4 +90,64 @@ export function rowToVoucher(ctx, ledgerId, row, batchId, bank) {
 
 export function makeBatch(ctx, { kind, ledgerId = '', file = '', bank = '', from = '', to = '', count = 0, opening = null, closing = null, openingAdj = 0, extra = {} }) {
   return { id: uid('bat'), entityId: ctx.entity.id, kind, ledgerId, file, bank, from, to, count, opening, closing, openingAdj, createdAt: nowISO(), ...extra };
+}
+
+/* ---------- own-account transfers ----------
+   A row whose UPI / UTR / IMPS reference (10+ digits) matches an entry already imported from another of your
+   bank / cash / wallet accounts, for the same amount in the opposite direction within 3 days, is the same money
+   moving between your own accounts. That entry (bank ↔ suspense / spending / income) is turned into ONE transfer
+   (bank ↔ bank) instead of adding a second entry. */
+export function refNumbers(t) { return new Set(String(t || '').match(/\d{10,}/g) || []); }
+export function findOwnTransfer(ctx, ledgerId, date, signedAmt, narration) {
+  const refs = refNumbers(narration);
+  if (!refs.size) return null;
+  const lo = addDays(date, -3), hi = addDays(date, 3);
+  for (const v of ctx.vouchers) {
+    if (v.date < lo || v.date > hi || v.lines.length !== 2 || v.pairId) continue;
+    if (v.lines.some(l => l.ledgerId === ledgerId)) continue;
+    const money = v.lines.find(l => ctx.isMoney(l.ledgerId) && lineAmt(l) === -signedAmt);
+    const other = v.lines.find(l => l !== money);
+    if (!money || !other || ctx.isMoney(other.ledgerId)) continue;
+    const r2 = refNumbers((v.meta && v.meta.bankNarration || '') + ' ' + v.narration);
+    for (const x of refs) if (r2.has(x)) return { voucher: v, moneyId: money.ledgerId, otherId: other.ledgerId };
+  }
+  return null;
+}
+/* the existing entry with its spending / income / suspense side moved to this account: now a transfer */
+export function relinkAsTransfer(ctx, ledgerId, row) {
+  const v = clone(row.pair.voucher);
+  for (const l of v.lines) if (l.ledgerId === row.pair.otherId) l.ledgerId = ledgerId;
+  v.type = inferType(ctx, v.lines);
+  v.fps = [...(v.fps || []), ...(v.fp && v.fpLedger && !(v.fps || []).some(x => x.l === v.fpLedger) ? [{ l: v.fpLedger, fp: v.fp }] : []), { l: ledgerId, fp: row.fp }];
+  v.meta = { ...(v.meta || {}), ownTransfer: { bankNarration2: row.narration, ref2: row.ref || '' } };
+  return v;
+}
+
+/* ---------- loan sections of a bank e-statement (parsePdfStatement → res.loans) ---------- */
+/* an existing loan account whose name / alias / note carries the loan account number (or its last 4 digits) */
+export function matchLoanLedger(ctx, sec) {
+  const acct = String(sec.acct || ''), last4 = acct.slice(-4);
+  const loans = ctx.ledgers.filter(l => !l.archived && ctx.rootOf(l) === 'liability' && ctx.natureOf(l) !== 'card');
+  return loans.find(l => acct && [l.name, l.alias, l.note, l.acctNo].join(' ').includes(acct))
+    || loans.find(l => last4 && [l.name, l.alias, l.acctNo].join(' ').includes(last4)) || null;
+}
+/* Interest / charges the bank debited to the loan: Dr interest (or charges), Cr loan. Collections (credits) are the EMIs,
+   which come from the savings rows, so they are not posted again. Re-imports are skipped by fingerprint. */
+export function loanSectionVouchers(ctx, sec, { loanId, interestId, chargesId, batchId }) {
+  const out = [];
+  for (const t of sec.txns) {
+    if (!t.debit) continue;
+    const fp = fingerprint(loanId, t.date, -t.debit, t.narration);
+    if (ctx.vouchers.some(v => v.fpLedger === loanId && v.fp === fp)) continue;
+    const isInt = /\bint\b|interest|int\.|int\s*coll/i.test(t.narration);
+    const v = newVoucher(ctx.entity.id, {
+      type: 'journal', src: 'import', date: t.date, batchId, fp,
+      narration: (isInt ? 'Interest charged by the bank — ' : 'Charged to loan — ') + t.narration,
+      lines: tidyLines([{ ledgerId: isInt ? interestId : (chargesId || interestId), dr: t.debit, cr: 0 }, { ledgerId: loanId, dr: 0, cr: t.debit }]),
+      meta: { bankNarration: t.narration, loanAcct: sec.acct }
+    });
+    v.fpLedger = loanId;
+    out.push(v);
+  }
+  return out;
 }

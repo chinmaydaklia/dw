@@ -91,3 +91,29 @@ test('Zerodha DP holding statement PDF: holdings table with wrapped company name
   assert.ok(r.items.every(x => x.noCost));
   assert.deepEqual(['HDFC BANK-EQ1/-', 'SBI - EQ', 'LT FOODS-EQTY', 'TATA CONSULTANCY-1/-', 'HERO MOTOCO (RS.2/-)'].map(holdingKey), ['HDFCBANK', 'SBI', 'LTFOODS', 'TATACONSULTANCY', 'HEROMOTOCO']);
 });
+
+import { findOwnTransfer, relinkAsTransfer, loanSectionVouchers, matchLoanLedger } from '../js/import/statement-plan.js';
+import { makeEntity, seedMasters } from '../js/core/masters.js';
+import { makeCtx } from '../js/core/books.js';
+import { newVoucher } from '../js/core/vouchers.js';
+test('own-account transfer by UPI reference; loan interest from the loan pages', () => {
+  const e = makeEntity({ name: 'T' }); const m = seedMasters(e);
+  const L = n => m.ledgers.find(l => l.name === n).id;
+  const sbi = L('SBI Savings'), bob = L('Bank of Baroda'), susp = m.ledgers.find(l => l.system === 'suspense').id;
+  const v = newVoucher(e.id, { type: 'payment', date: '2026-08-19', narration: 'UPI/DR/194807941903/ME /BARB/9999999999/Loan', lines: [{ ledgerId: susp, dr: 4000000, cr: 0 }, { ledgerId: sbi, dr: 0, cr: 4000000 }], meta: { bankNarration: 'UPI/DR/194807941903/ME /BARB/9999999999/Loan' } });
+  const ctx = makeCtx({ entity: e, groups: m.groups, ledgers: m.ledgers, vouchers: [v] });
+  const pair = findOwnTransfer(ctx, bob, '2026-08-19', 4000000, 'UPI/194807941903/19:48:10/UPI/9999999999@upi/Loan');
+  assert.ok(pair && pair.voucher.id === v.id && pair.moneyId === sbi);
+  assert.equal(findOwnTransfer(ctx, bob, '2026-08-19', -4000000, 'UPI/194807941903/x'), null, 'same direction is not a transfer');
+  assert.equal(findOwnTransfer(ctx, bob, '2026-08-30', 4000000, 'UPI/194807941903/x'), null, 'too far apart');
+  const nv = relinkAsTransfer(ctx, bob, { pair, fp: 'fp_x', narration: 'n' });
+  assert.equal(nv.type, 'contra');
+  assert.deepEqual(nv.lines.map(l => l.ledgerId).sort(), [sbi, bob].sort());
+  const loan = { ...m.ledgers.find(l => l.name === 'Home Loan'), alias: '99990000001' };
+  const ctx2 = makeCtx({ entity: e, groups: m.groups, ledgers: m.ledgers.map(l => (l.id === loan.id ? loan : l)), vouchers: [] });
+  const sec = { acct: '99990000001', txns: [{ date: '2026-08-04', narration: '99990000001:Normal Int.Coll:04-07-2026 to 03-0', debit: 120000, credit: 0 }, { date: '2026-08-04', narration: 'Loan Coll.', debit: 0, credit: 300000 }] };
+  assert.equal(matchLoanLedger(ctx2, sec).id, loan.id);
+  const vs = loanSectionVouchers(ctx2, sec, { loanId: loan.id, interestId: L('Home Loan Interest'), batchId: 'b1' });
+  assert.equal(vs.length, 1, 'only the interest is posted; the collection is the EMI from savings');
+  assert.deepEqual(vs[0].lines, [{ ledgerId: L('Home Loan Interest'), dr: 120000, cr: 0 }, { ledgerId: loan.id, dr: 0, cr: 120000 }]);
+});
