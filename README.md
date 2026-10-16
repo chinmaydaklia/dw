@@ -96,6 +96,18 @@ Every Zerodha P&L import goes through review first and can be undone from Import
 
 These details are searchable in All entries and included in the CA pack's day book. A cheque that is not account-payee counts as cash for the presumptive-tax limit. Settings can make the detailed form the default.
 
+## Sync phone & laptop
+
+Data → **Sync phone & laptop** (`#/sync`). There is no server: the two devices talk directly.
+
+- **Nearby (same Wi-Fi):** tap *Start* on one device and *Join* on the other, then scan each other's QR codes with the camera (or copy and paste the codes). The devices exchange changes over an encrypted WebRTC link, and both report "N changes in, M out".
+- **Sync file:** *Save sync file* writes a `.dwsync` file, which can be passphrase-encrypted (AES-GCM). Send it any way you like and open it on the other device. Then sync back the same way.
+- **How changes merge:** record by record. The newer edit of a record wins, and a delete stays deleted unless the record was edited afterwards. Entry numbers that both devices handed out are renumbered the same way on both.
+- **A brand-new device** takes the other device's records instead of adding a second You/Spouse/demo. If two devices were used separately and never synced, the app warns you and offers to take the other device's records (a snapshot is saved first).
+- **The same statement imported on both devices** before syncing is spotted, and one tap removes the second copy.
+- **Never synced:** settings, the change history and on-device snapshots. Bank passwords are never stored.
+- **Known limit:** if the same statement *with loan accounts* is imported on both devices before syncing, each device creates its own loan ledgers. Delete the extra ones by hand.
+
 ## Run it
 
 Serve the folder over HTTP (service workers and ES modules need it):
@@ -132,7 +144,8 @@ Every import goes through a review screen and nothing posts until you approve. E
   - unclassified rows go to **Suspense** until you reclassify them
 - **Old DoctorWealth data:** read once from this browser (`dw_state_v1`) or from its JSON backup; any schema version, rupees or paise. Old accounts are mapped to existing ledgers or new ones. Income with TDS becomes gross / TDS receivable / net, and loan EMIs split into principal and interest. Spouse-owned accounts go to the Spouse entity, with inter-entity current accounts. Investments, holdings, tax P&L, rules and hospitals come across. Every old account balance is checked against the new books before you import. The old data is never modified.
 - **Zerodha tax P&L** (`taxpnl-….xlsx`): realised gains, F&O and dividends per entity and FY, stored for the tax engine.
-- **Zerodha holdings** (Kite Excel): a snapshot compared at cost with the matching ledger.
+- **Zerodha holdings** (Kite Excel, or the password-protected DP holding statement PDF): a snapshot compared at cost with the matching ledger. The DP statement has no buy cost, so it updates values only.
+- **Loan accounts in bank statements** (e.g. a BoB e-statement): EMIs go to the matching loan ledger, which is created if missing, and the bank's interest is posted. **Own-account transfers** (the same UPI/UTR on both statements) become a single transfer instead of two entries.
 - **Restore** a DoctorWealth Books backup.
 
 ## Layout
@@ -145,7 +158,7 @@ js/core     masters (templates, tax tags), books (engine & reports), vouchers (s
 js/import   statement-parse (PDF/CSV/XLS parsers), statement-plan (rules, duplicates), zerodha, libs (lazy vendor loader)
 js/app      db (IndexedDB), store (state, audit, numbering, backups), app (shell, router, shortcuts)
 js/ui, js/views   components and pages
-vendor/     SheetJS 0.18.5, pdf.js 3.11.174 (bundled for offline use)
+vendor/     SheetJS 0.18.5, pdf.js 3.11.174, jsQR (QR scanning fallback) (bundled for offline use)
 tests/      node --test suites
 ```
 
@@ -157,4 +170,4 @@ tests/      node --test suites
 ## Next phases
 
 3. Tax engine: Sec 58 / 44ADA vs actual, regimes, advance tax, ITR-3 schedules, 26AS/AIS.
-4. Imports & sync: Zerodha tradebook, MF/CoinDCX/AIS, device change-file sync, PIN and encryption.
+4. Imports & sync: Zerodha tradebook, MF/CoinDCX/AIS, PIN lock.

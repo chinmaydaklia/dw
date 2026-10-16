@@ -16,6 +16,7 @@ import { renderFamilyMoney } from '../views/family.js';
 import { caView } from '../ui/terms.js';
 import { renderPortfolio, renderAsset, renderGains, renderTrading, renderPrices } from '../views/invest.js';
 import { renderImport } from '../views/importer.js';
+import { renderSync } from '../views/sync.js';
 import { renderSettings, renderRecurring, renderHealth, renderAudit } from '../views/settings.js';
 
 const NAV = [
@@ -24,7 +25,7 @@ const NAV = [
   ['My money', [['ledgers', '▤', 'Accounts & categories', 'G L']]],
   ['Investments', [['portfolio', '◆', 'Portfolio', 'G V'], ['gains', '△', 'Capital gains', 'G G'], ['trading', '⇵', 'F&O / intraday', ''], ['prices', '₹', 'Update prices', '']]],
   ['Reports', [['pl', '↕', 'Income & spending', 'G P'], ['bs', '▦', 'What I own & owe', 'G S'], ['networth', '↗', 'Net worth', ''], ['analysis', '◔', 'Breakdown', 'G A'], ['cf', '⇆', 'Money in & out', 'G C'], ['cash', '₹', 'Cash vs digital', '']]],
-  ['Data', [['import', '⇩', 'Import files', 'G I'], ['settings', '⚙', 'Settings & backup', ''], ['health', '✓', 'Checks', '']]],
+  ['Data', [['import', '⇩', 'Import files', 'G I'], ['sync', '⇆', 'Sync phone & laptop', ''], ['settings', '⚙', 'Settings & backup', ''], ['health', '✓', 'Checks', '']]],
   ['For my CA', [['ca-pack', '⇩', 'Download CA pack', ''], ['tb', '⚖', 'Trial balance', 'G T'], ['ca-pl', '↕', 'Profit & loss account', ''], ['ca-bs', '▦', 'Balance sheet', ''], ['ca-daybook', '☰', 'Day book (Dr / Cr)', ''], ['ca-ledgers', '▤', 'Ledgers & groups', '']]]
 ];
 const TITLES = Object.fromEntries(NAV.flatMap(([, items]) => items.map(i => [i[0], i[2]])));
@@ -117,6 +118,7 @@ function render(dataChanged = false) {
     else if (name === 'prices') renderPrices(content);
     else if (REPORTS.has(name)) renderReport(content, name, route.args);
     else if (name === 'import') renderImport(content);
+    else if (name === 'sync') renderSync(content);
     else if (name === 'settings') renderSettings(content);
     else if (name === 'recurring') renderRecurring(content);
     else if (name === 'health') renderHealth(content, health);

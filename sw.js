@@ -1,18 +1,18 @@
 /* DoctorWealth Books service worker: the whole app (code + bundled libraries) is cached so it opens and
    works with no network. A new version waits until the user taps "Reload" in the app. */
-const VERSION = '1.3.2';
+const VERSION = '1.4.0';
 const CACHE = 'dwb-' + VERSION;
 const SHELL = [
   './', './index.html', './manifest.webmanifest', './css/app.css',
   './icons/icon.svg', './icons/icon-192.png', './icons/icon-512.png', './icons/icon-maskable-512.png',
   './js/main.js',
   './js/app/app.js', './js/app/db.js', './js/app/store.js',
-  './js/core/books.js', './js/core/demo.js', './js/core/integrity.js', './js/core/invest.js', './js/core/legacy.js', './js/core/masters.js', './js/core/quick.js', './js/core/recurring.js', './js/core/taxrules.js', './js/core/vouchers.js',
+  './js/core/books.js', './js/core/demo.js', './js/core/integrity.js', './js/core/invest.js', './js/core/legacy.js', './js/core/masters.js', './js/core/quick.js', './js/core/recurring.js', './js/core/sync.js', './js/core/taxrules.js', './js/core/vouchers.js',
   './js/import/libs.js', './js/import/statement-parse.js', './js/import/statement-plan.js', './js/import/zerodha.js', './js/import/zerodha-plan.js',
-  './js/lib/dates.js', './js/lib/money.js', './js/lib/util.js',
+  './js/lib/crypto.js', './js/lib/dates.js', './js/lib/money.js', './js/lib/qr.js', './js/lib/util.js',
   './js/ui/charts.js', './js/ui/dom.js', './js/ui/pickers.js', './js/ui/terms.js', './js/ui/widgets.js',
-  './js/views/daybook.js', './js/views/dashboard.js', './js/views/entry.js', './js/views/family.js', './js/views/importer.js', './js/views/invest.js', './js/views/masters.js', './js/views/reports.js', './js/views/settings.js',
-  './vendor/xlsx.full.min.js', './vendor/pdfjs/pdf.min.js', './vendor/pdfjs/pdf.worker.min.js'
+  './js/views/daybook.js', './js/views/dashboard.js', './js/views/entry.js', './js/views/family.js', './js/views/importer.js', './js/views/invest.js', './js/views/masters.js', './js/views/reports.js', './js/views/settings.js', './js/views/sync.js',
+  './vendor/xlsx.full.min.js', './vendor/pdfjs/pdf.min.js', './vendor/pdfjs/pdf.worker.min.js', './vendor/jsqr/jsQR.min.js'
 ];
 
 self.addEventListener('install', e => {

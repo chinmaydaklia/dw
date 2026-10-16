@@ -20,6 +20,10 @@ export async function loadPDF() {
   window.pdfjsLib.GlobalWorkerOptions.workerSrc = base + 'pdfjs/pdf.worker.min.js';
   return window.pdfjsLib;
 }
+export async function loadJsQR() {
+  await loadScript(base + 'jsqr/jsQR.min.js', () => !!window.jsQR);
+  return window.jsQR;
+}
 /* Workbook -> { sheetName: rows[][] } */
 export async function readWorkbook(buf) {
   const XLSX = await loadXLSX();
