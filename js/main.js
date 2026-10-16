@@ -1,6 +1,7 @@
 /* Boot: open the database, run migrations + integrity checks, start the UI, register the service worker. */
 import * as store from './app/store.js';
 import { start } from './app/app.js';
+import { refreshAppFiles } from './app/db.js';
 
 async function boot() {
   try {
@@ -13,6 +14,11 @@ async function boot() {
     box.className = 'note bad';
     box.style.margin = '24px';
     box.textContent = 'DoctorWealth could not open your books: ' + (err && err.message || err) + ' — your data has not been changed. Try reloading; if this persists, use a backup file.';
+    const fix = document.createElement('button');
+    fix.className = 'btn sm primary'; fix.style.marginTop = '10px'; fix.style.display = 'block';
+    fix.textContent = 'Update app & reload (your data is kept)';
+    fix.onclick = () => refreshAppFiles(true);
+    box.appendChild(fix);
     document.getElementById('app').appendChild(box);
   }
   registerSW();

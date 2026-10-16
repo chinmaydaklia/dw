@@ -6,8 +6,8 @@ import { ledgerItems, ledgerCombo } from '../ui/pickers.js';
 import * as store from '../app/store.js';
 import { S } from '../app/store.js';
 import { parseCSV, parseTableStatement, groupPdfItems, parsePdfStatement, BANK_NAMES } from '../import/statement-parse.js';
-import { planRows, rowToVoucher, makeBatch, ruleMatch, suggestKeyword } from '../import/statement-plan.js';
-import { parseTaxPnl, parseHoldings, parseTradewise, parseConsolePnl } from '../import/zerodha.js';
+import { planRows, rowToVoucher, makeBatch, ruleMatch, suggestKeyword, matchLoanLedger, loanSectionVouchers, relinkAsTransfer } from '../import/statement-plan.js';
+import { parseTaxPnl, parseHoldings, parseTradewise, parseConsolePnl, parseDpHoldings, holdingKey } from '../import/zerodha.js';
 import { planZerodhaPnl, buildZerodhaPostings } from '../import/zerodha-plan.js';
 import { ASSET_TYPES } from '../core/invest.js';
 import { readWorkbook, readPdfItems } from '../import/libs.js';
@@ -17,8 +17,9 @@ import { fmtDate, today, fyOf, fyList, fyRange, parseDateAny } from '../lib/date
 import { uid, nowISO, normNarr } from '../lib/util.js';
 import { toPaise } from '../lib/money.js';
 import { valueAsset } from '../core/invest.js';
-import { newVoucher, tidyLines } from '../core/vouchers.js';
-import { BROKER_WORDS, MF_WORDS } from '../core/masters.js';
+import { newVoucher, tidyLines, validateVoucher, nextNumber } from '../core/vouchers.js';
+import { BROKER_WORDS, MF_WORDS, makeLedger } from '../core/masters.js';
+import { addDays } from '../lib/dates.js';
 
 export function renderImport(root) {
   const e = store.activeEntity();
@@ -28,7 +29,7 @@ export function renderImport(root) {
       tile('🏦', 'Bank statement', 'PDF (password OK), CSV, XLS, XLSX · SBI, BoB, HDFC, IDFC tuned + generic columns', () => importStatement()),
       tile('⇪', 'Old DoctorWealth data', 'Bring across accounts, income, expenses, loans and investments — every balance is checked', () => importLegacy()),
       tile('📈', 'Zerodha P&L', 'Tax P&L (taxpnl-….xlsx) or Console P&L — adds your sales, profits and F&O results', () => importZerodhaPnl()),
-      tile('📊', 'Zerodha holdings', 'Kite holdings Excel — adds shares to Portfolio and updates prices', () => importHoldings()),
+      tile('📊', 'Zerodha holdings', 'Kite holdings Excel, or the DP holding statement PDF — adds shares to Portfolio and updates prices', () => importHoldings()),
       tile('↺', 'Restore backup', 'A backup file from this app (replaces everything)', () => restoreBackup())));
   add(root, h('div.section-h', h('h2', 'Rules'), h('span.muted.small', 'a word in the bank description → category (you still check every row)'), h('span.spacer'), h('button.btn.sm', { onclick: () => editRule(null) }, '+ Rule')));
   const rules = S.rules.filter(r => r.entityId === e.id);
@@ -131,6 +132,43 @@ function reviewStatement(args, res) {
   };
   const rows = planRows(c, args.ledgerId, res, rules, suspense ? suspense.id : '', autoMap);
   const items = ledgerItems(c, l => l.id !== args.ledgerId);
+  /* loan accounts printed in the same PDF (Bank of Baroda e-statement) */
+  const finItems = ledgerItems(c, l => c.rootOf(l) === 'expense');
+  const homeInt = c.ledgers.find(l => !l.archived && l.taxTag === 'home_loan_interest');
+  const charges = c.ledgers.find(l => !l.archived && /bank.*charges/i.test(l.name) && c.rootOf(l) === 'expense');
+  const loanPlans = (res.loans || []).map((sec, i) => {
+    const m = matchLoanLedger(c, sec);
+    const long = sec.detail && sec.detail.tenure >= 120;
+    return { i, sec, ledgerId: m ? m.id : '', create: !m, interestId: (long && homeInt) ? homeInt.id : '', post: true, matchOpening: true };
+  });
+  const loanRef = id => (loanPlans.find(pl => 'newloan:' + pl.i === id) || null);
+  for (const r of rows) for (const pl of loanPlans) {
+    if (r.dir === 'debit' && pl.sec.acct && r.narration.replace(/\s/g, '').includes(pl.sec.acct)) { r.counterId = pl.ledgerId || 'newloan:' + pl.i; r.loanPlan = pl.i; r.hint = 'loan'; delete r.pair; }
+  }
+  const loanName = pl => (BANK_NAMES[res.bank] && res.bank !== 'generic' ? BANK_NAMES[res.bank] + ' loan …' : 'Loan …') + String(pl.sec.acct).slice(-4);
+  const loanBox = h('div');
+  function drawLoans() {
+    clear(loanBox);
+    if (!loanPlans.length) return;
+    add(loanBox, h('div.card', { style: { margin: '10px 0', padding: '10px 12px' } }, h('b', '⚖ Loan accounts in this statement'),
+      h('div.small.muted', 'The bank’s own loan pages: interest it charged and what you owe. EMIs from this account go to the loan; the interest is added so the loan matches the bank exactly.'),
+      loanPlans.map(pl => {
+        const sc = pl.sec, d = sc.detail || {};
+        const loanSel = combo([{ id: '', label: '+ Create “' + loanName(pl) + '”', group: '' }, ...ledgerItems(c, 'loanTaken')], pl.ledgerId, id => {
+          pl.ledgerId = id; pl.create = !id;
+          for (const r of rows) if (r.loanPlan === pl.i) r.counterId = id || 'newloan:' + pl.i;
+          draw();
+        }, { sm: true });
+        const intSel = combo([{ id: '', label: '+ Create “Loan Interest”', group: '' }, ...finItems], pl.interestId, id => { pl.interestId = id; }, { sm: true });
+        const ints = sc.txns.filter(t => t.debit).length;
+        return h('div', { style: { borderTop: '1px solid var(--line)', marginTop: '8px', paddingTop: '8px' } },
+          h('div', 'A/c …' + String(sc.acct).slice(-6) + ' · bank says you owe ', h('b', money(Math.abs(sc.closing || 0))), ' on ' + fmtDate(sc.to),
+            h('span.small.muted', ' · interest charged ' + money(sc.totalDebit) + ' · paid ' + money(sc.totalCredit) + (d.emi ? ' · EMI ' + money(d.emi) : '') + (d.rate ? ' · ' + d.rate + '%' : ''))),
+          h('div.grid.g2', { style: { marginTop: '6px' } }, field('This loan is', loanSel), field('Interest goes to', intSel)),
+          h('label.check.small', h('input', { type: 'checkbox', checked: pl.post, onchange: e => { pl.post = e.target.checked; } }), h('span', 'Add the bank’s ' + ints + ' interest / charge entr' + (ints === 1 ? 'y' : 'ies') + ' to this loan')),
+          h('label.check.small', h('input', { type: 'checkbox', checked: pl.matchOpening, onchange: e => { pl.matchOpening = e.target.checked; } }), h('span', 'Set the loan’s starting balance so it matches the bank (owed ' + money(Math.abs(sc.opening || 0)) + ' on ' + fmtDate(sc.from) + ')')));
+      })));
+  }
   const before = ledgerStatement(c, args.ledgerId, { to: res.to }).closing;
   const adj = { on: false, amount: 0 };
   let filter = '', shown = 200;
@@ -144,6 +182,7 @@ function reviewStatement(args, res) {
   const body = h('div',
     h('p.small.muted', { style: { marginTop: 0 } }, args.file.name + ' · ' + (BANK_NAMES[res.bank] || res.bank) + ' · ' + rows.length + ' rows · ' + fmtDate(res.from) + ' → ' + fmtDate(res.to)),
     sum,
+    loanBox,
     res.guesses ? h('div.note.warn', { style: { margin: '8px 0' } }, res.guesses + ' row(s): could not be sure if money came in or went out — check rows marked ⚠ (use ⇅ to flip).') : null,
     h('div.toolbar', { style: { margin: '10px 0 8px' } },
       h('button.btn.sm', { onclick: () => { for (const r of visible()) r.sel = true; draw(); } }, 'Select all shown'),
@@ -171,6 +210,8 @@ function reviewStatement(args, res) {
     if (r.check === 'guess' || r.check === 'mismatch') flags.push(h('span.pill.warn', { title: 'Not sure if money came in or went out' }, '⚠'));
     if (r.rule) flags.push(h('span.pill.gold', { title: 'Matched rule' }, '★ ' + r.rule));
     if (r.hint === 'wallet') flags.push(h('span.pill', { title: 'Moving your own money to a broker / wallet — not spending, not yet an investment' }, '⇄ to wallet'));
+    if (r.hint === 'own' && r.pair && r.counterId === r.pair.moneyId) flags.push(h('span.pill.ok', { title: 'Same UPI / UTR reference as an entry already imported from ' + ((c.lById.get(r.pair.moneyId) || {}).name || 'another account') + ' on ' + fmtDate(r.pair.voucher.date) + '. That entry becomes one transfer between your accounts; nothing is added twice.' }, '⇄ own transfer · ' + ((c.lById.get(r.pair.moneyId) || {}).name || '')));
+    if (r.hint === 'loan') { const pl = loanPlans[r.loanPlan]; flags.push(h('span.pill.gold', { title: 'EMI for the loan account in this statement' }, '⚖ EMI → ' + (pl && pl.create ? 'new ' + loanName(pl) : ((c.lById.get(r.counterId) || {}).name || 'loan')))); }
     if (r.hint === 'invest') flags.push(h('span.pill', { title: 'Looks like a mutual fund purchase — link it to the fund in Portfolio afterwards (no second entry needed)' }, '◆ investment'));
     if (r.dup) flags.push(h('span.pill.warn', { title: r.dup.voucher ? 'Already recorded on ' + fmtDate(r.dup.voucher.date) : 'Same as row #' + r.dup.row }, '⧉ duplicate'));
     else if (r.soft) flags.push(h('span.pill.warn', { title: 'A similar entry already exists on ' + fmtDate(r.soft.voucher.date) + ' ' + (r.soft.voucher.narration || '') }, '≈ possible duplicate'));
@@ -222,20 +263,74 @@ function reviewStatement(args, res) {
     const bad = keep.find(r => !r.counterId || !r.amount || !r.date);
     if (bad) return toast('Row dated ' + fmtDate(bad.date) + ' needs a category / amount / date');
     const batch = makeBatch(c, { kind: 'statement', ledgerId: args.ledgerId, file: args.file.name, bank: res.bank, from: res.from, to: res.to, count: keep.length, opening: res.opening, closing: res.closing, openingAdj: adj.on ? adj.amount : 0 });
-    const vouchers = keep.map(r => rowToVoucher(c, args.ledgerId, r, batch.id, res.bank));
+    /* loan accounts first: create the ones asked for, line their starting balance up with the bank */
+    batch.ledgerIds = []; batch.loanAdj = []; batch.relinked = [];
+    const loanGroup = S.groups.find(g => g.entityId === entity.id && g.key === 'loans') || S.groups.find(g => g.entityId === entity.id && g.root === 'liability');
+    const pre = [];
+    for (const pl of loanPlans) {
+      const used = pl.post || pl.matchOpening || keep.some(r => r.counterId === 'newloan:' + pl.i);
+      if (!used) continue;
+      if (pl.create) {
+        const l = makeLedger({ entityId: entity.id, groupId: loanGroup.id, name: loanName(pl), alias: String(pl.sec.acct), note: 'Loan account ' + pl.sec.acct + ' (from statement import)' });
+        l.acctNo = String(pl.sec.acct);
+        if (pl.matchOpening && pl.sec.opening != null) l.opening = pl.sec.opening;
+        pre.push({ store: 'ledgers', put: l }); batch.ledgerIds.push(l.id); pl.ledgerId = l.id;
+        for (const r of keep) if (r.counterId === 'newloan:' + pl.i) r.counterId = l.id;
+      } else if (pl.matchOpening && pl.sec.opening != null) {
+        const lg = c.lById.get(pl.ledgerId);
+        const before = ledgerStatement(c, pl.ledgerId, { to: addDays(pl.sec.from, -1) }).closing;
+        const delta = pl.sec.opening - before;
+        if (delta) { pre.push({ store: 'ledgers', put: { ...lg, opening: (lg.opening || 0) + delta, acctNo: lg.acctNo || String(pl.sec.acct), updatedAt: nowISO() } }); batch.loanAdj.push({ ledgerId: lg.id, delta }); }
+      }
+      if (pl.post && !pl.interestId) {
+        const had = c.ledgers.find(l => !l.archived && l.name.toLowerCase() === 'loan interest');
+        const il = await store.ensureLedgerNamed(entity.id, 'finexp', 'Loan Interest', { taxTag: 'none' });
+        if (!had) batch.ledgerIds.push(il.id);
+        pl.interestId = il.id;
+      }
+    }
+    if (pre.length) await store.commit(pre);
+    const c2 = store.ctxOf(entity.id);
+    const relink = keep.filter(r => r.pair && r.counterId === r.pair.moneyId && c2.vouchers.some(v => v.id === r.pair.voucher.id));
+    const vouchers = keep.filter(r => !relink.includes(r)).map(r => rowToVoucher(c2, args.ledgerId, r, batch.id, res.bank));
+    for (const pl of loanPlans) if (pl.post && pl.ledgerId) vouchers.push(...loanSectionVouchers(c2, pl.sec, { loanId: pl.ledgerId, interestId: pl.interestId, chargesId: charges ? charges.id : '', batchId: batch.id }));
     const extra = [{ store: 'batches', put: batch }];
     if (adj.on && adj.amount) extra.push({ store: 'ledgers', put: { ...L, opening: (L.opening || 0) + adj.amount, updatedAt: nowISO() } });
+    /* own transfers: the entry already imported from the other account becomes one transfer (kept for undo) */
+    const pool = S.vouchers.slice();
+    for (const r of relink) {
+      const orig = c2.vouchers.find(v => v.id === r.pair.voucher.id);
+      const nv = relinkAsTransfer(c2, args.ledgerId, { ...r, pair: { ...r.pair, voucher: orig } });
+      const errs = validateVoucher(c2, nv, { isNew: false, previous: orig });
+      if (errs.length) return toast(fmtDate(r.date) + ': ' + errs.join(' '));
+      if (nv.type !== orig.type) nv.no = nextNumber(pool, nv.entityId, nv.type, nv.date);
+      nv.meta.ownTransfer.batch2 = batch.id;
+      nv.updatedAt = nowISO(); pool.push(nv);
+      batch.relinked.push({ before: orig });
+      extra.push({ store: 'vouchers', put: nv });
+    }
+    batch.count = vouchers.length + relink.length;
     try {
       await store.saveVouchers(vouchers, extra);
     } catch (e) { return toast(e.message); }
     md.close();
     const recon = res.closing != null ? ledgerStatement(store.ctx(), args.ledgerId, { to: res.to }).closing - res.closing : null;
+    const loanChecks = loanPlans.filter(pl => pl.ledgerId && pl.sec.closing != null).map(pl => {
+      const lg = store.ledger(pl.ledgerId);
+      const end = pl.sec.to > res.to ? pl.sec.to : res.to; /* the loan pages close on the statement's last day */
+      const off = ledgerStatement(store.ctx(), pl.ledgerId, { to: end }).closing - pl.sec.closing;
+      return h('div', { class: 'note ' + (off === 0 ? 'ok' : 'warn') }, off === 0 ? '✓ ' + lg.name + ' matches the bank: you owe ' + money(Math.abs(pl.sec.closing)) + ' on ' + fmtDate(end) + '.'
+        : lg.name + ' differs from the bank by ' + money(Math.abs(off)) + ' on ' + fmtDate(end) + ' (EMIs paid from another account are not in this statement).');
+    });
     const done = openModal({
       title: 'Imported ' + keep.length + ' entr' + (keep.length === 1 ? 'y' : 'ies'), body: h('div', h('p', args.file.name + ' → ' + L.name),
-        recon === null ? null : h('div', { class: 'note ' + (recon === 0 ? 'ok' : 'warn') }, recon === 0 ? '✓ Matches — the account balance on ' + fmtDate(res.to) + ' is the same as the bank’s.' : 'Differs from the bank by ' + money(Math.abs(recon)) + '. Look for missed or repeated rows, or correct the starting balance.')),
+        recon === null ? null : h('div', { class: 'note ' + (recon === 0 ? 'ok' : 'warn') }, recon === 0 ? '✓ Matches — the account balance on ' + fmtDate(res.to) + ' is the same as the bank’s.' : 'Differs from the bank by ' + money(Math.abs(recon)) + '. Look for missed or repeated rows, or correct the starting balance.'),
+        relink.length ? h('div.note.ok', '⇄ ' + relink.length + ' transfer(s) between your own accounts recorded once (the earlier entr' + (relink.length === 1 ? 'y was' : 'ies were') + ' turned into transfers).') : null,
+        loanChecks),
       foot: [h('button.btn.danger', { onclick: () => { done.close(); undoBatch(store.S.batches.find(b => b.id === batch.id)); } }, 'Undo this import'), h('button.btn.primary', { onclick: () => done.close() }, 'Done')]
     });
   }
+  drawLoans();
 }
 function kpiBox(lbl, val, foot) { return h('div.kpi', h('div.lbl', lbl), h('div.val', { style: { fontSize: '16px' } }, val), foot ? h('div.foot', foot) : null); }
 
@@ -244,10 +339,20 @@ export async function undoBatch(b) {
   const vs = S.vouchers.filter(v => v.batchId === b.id);
   const ent = store.entityById(b.entityId);
   if (ent && ent.lockedUpto && vs.some(v => v.date <= ent.lockedUpto)) return toast('Some entries are in a locked year. Unlock it first.');
-  const extraTxt = b.kind === 'legacy' ? ' It also removes accounts, rules, holdings and tax P&L it created, and puts starting balances back.' : b.openingAdj ? ' It also puts the starting balance back.' : '';
+  const shared = vs.find(v => v.meta && v.meta.ownTransfer && v.meta.ownTransfer.batch2 && S.batches.some(x => x.id === v.meta.ownTransfer.batch2));
+  if (shared) { const other = S.batches.find(x => x.id === shared.meta.ownTransfer.batch2); return toast('Undo the later import first (' + (other.file || batchLabel(other)) + ') — it turned some of these entries into transfers.'); }
+  const extraTxt = b.kind === 'legacy' ? ' It also removes accounts, rules, holdings and tax P&L it created, and puts starting balances back.'
+    : (b.relinked && b.relinked.length ? ' Transfers it matched go back to the separate entries they were.' : '') + ((b.ledgerIds && b.ledgerIds.length) || (b.loanAdj && b.loanAdj.length) ? ' Loan accounts / starting balances it set are undone.' : '') + (b.openingAdj ? ' It also puts the starting balance back.' : '');
   if (!(await confirmBox('Undo this import?', 'Removes its ' + vs.length + ' entr' + (vs.length === 1 ? 'y' : 'ies') + ', including any you changed since.' + extraTxt, 'Undo import', true))) return;
   const ops = vs.map(v => ({ store: 'vouchers', del: v.id }));
   if (b.kind === 'statement' && b.openingAdj) { const l = store.ledger(b.ledgerId); if (l) ops.push({ store: 'ledgers', put: { ...l, opening: (l.opening || 0) - b.openingAdj } }); }
+  if (b.kind === 'statement') {
+    /* own transfers go back to the entries they were; loan starting balances and accounts this import created are undone */
+    for (const x of b.relinked || []) ops.push({ store: 'vouchers', put: x.before });
+    for (const a of b.loanAdj || []) { const l = store.ledger(a.ledgerId); if (l) ops.push({ store: 'ledgers', put: { ...l, opening: (l.opening || 0) - a.delta } }); }
+    const remaining = S.vouchers.filter(v => v.batchId !== b.id);
+    for (const id of b.ledgerIds || []) if (!remaining.some(v => v.lines.some(x => x.ledgerId === id))) ops.push({ store: 'ledgers', del: id });
+  }
   if (b.kind === 'legacy') {
     const remaining = S.vouchers.filter(v => v.batchId !== b.id);
     for (const [id, d] of Object.entries(b.openingDeltas || {})) { const l = store.ledger(id); if (l && !(b.ledgerIds || []).includes(id)) ops.push({ store: 'ledgers', put: { ...l, opening: (l.opening || 0) - d } }); }
@@ -518,18 +623,48 @@ function editTaxSummary(f, res) {
   });
 }
 
+/* password for a protected PDF (Zerodha uses the PAN in capitals); used once, never stored */
+export function askPdfPassword(title, hint) {
+  return new Promise(resolve => {
+    let done = false;
+    const inp = h('input.inp', { type: 'password', autocomplete: 'off', autofocus: true });
+    const ok = () => { done = true; md.close(); resolve(inp.value); };
+    inp.addEventListener('keydown', ev => { if (ev.key === 'Enter') ok(); });
+    const md = openModal({ title, body: h('div.grid', h('p.small.muted', { style: { margin: 0 } }, hint || 'Used only to open the file on this device; not saved.'), inp),
+      foot: [h('button.btn', { onclick: () => md.close() }, 'Cancel'), h('button.btn.primary', { onclick: ok }, 'Open')], onClose: () => { if (!done) resolve(null); } });
+  });
+}
+async function readHoldingsPdf(f) {
+  let pw = '', title = 'This statement is password-protected';
+  for (;;) {
+    try { return parseDpHoldings((await readPdfItems(await f.arrayBuffer(), pw)).map(groupPdfItems)); }
+    catch (err) {
+      if (err.code !== 'PASSWORD_NEEDED' && err.code !== 'PASSWORD_WRONG') throw err;
+      if (err.code === 'PASSWORD_WRONG') title = 'Wrong password — try again';
+      pw = await askPdfPassword(title, 'Zerodha statements usually open with your PAN in capitals. Used only to open the file on this device; not saved.');
+      if (pw === null) return null;
+    }
+  }
+}
 export async function importHoldings() {
-  const f = await pickFile('.xlsx,.xls,.csv'); if (!f) return;
+  const f = await pickFile('.xlsx,.xls,.csv,.pdf,application/pdf'); if (!f) return;
   let res;
   try {
-    const rows = /\.csv$/i.test(f.name) ? parseCSV(await f.text()) : Object.values(await readWorkbook(await f.arrayBuffer()))[0];
-    res = parseHoldings(rows);
+    if (/\.pdf$/i.test(f.name)) { res = await readHoldingsPdf(f); if (!res) return; }
+    else {
+      const rows = /\.csv$/i.test(f.name) ? parseCSV(await f.text()) : Object.values(await readWorkbook(await f.arrayBuffer()))[0];
+      res = parseHoldings(rows);
+    }
   } catch (e) { return toast('Could not read the file: ' + e.message); }
   if (res.error) return openModal({ title: 'Not imported', body: h('div.note.warn', res.error) });
   const e = store.activeEntity();
   const c = store.ctx();
   const assets = store.assetsOf(e.id);
-  const match = x => assets.find(a => (x.isin && a.isin === x.isin) || (a.symbol && a.symbol === x.symbol.toUpperCase()));
+  const dp = res.source === 'dp', priceDate = res.asOf || today();
+  /* ISIN first, then symbol, then the company name reduced to a key ("HDFC BANK-EQ1/-" ~ "HDFCBANK") */
+  const match = x => assets.find(a => x.isin && a.isin === x.isin)
+    || assets.find(a => a.symbol && a.symbol === x.symbol.toUpperCase())
+    || assets.find(a => { const k = holdingKey(a.symbol || a.name), k2 = holdingKey(x.name || x.symbol); return k && k2 && (k === k2 || (k.length >= 6 && k2.length >= 6 && (k.startsWith(k2) || k2.startsWith(k)))); });
   const plan = res.items.map(x => {
     const a = match(x);
     const held = a ? valueAsset(a, c.vouchers).qty : 0;
@@ -546,14 +681,15 @@ export async function importHoldings() {
     h('label.check', h('input', { type: 'radio', name: 'hhow', onchange: () => { how.mode = 'paid'; drawHow(); } }), h('span', h('b', 'Bought recently with money from my Zerodha wallet / bank'), h('div.small.muted', 'Recorded as purchases, so the wallet goes down by the same amount — counted once.'))),
     payBox);
   const md = openModal({
-    title: 'Review holdings', sub: f.name + ' · ' + res.items.length + ' holdings · cost ' + money(res.cost) + ' · value ' + money(res.value), size: 'wide',
+    title: 'Review holdings', sub: f.name + ' · ' + res.items.length + ' holdings' + (dp ? ' as on ' + fmtDate(priceDate) + ' · value ' + money(res.value) : ' · cost ' + money(res.cost) + ' · value ' + money(res.value)), size: 'wide',
     body: h('div',
       h('div.tbl-wrap', { style: { maxHeight: '45vh', overflowY: 'auto' } }, h('table.tbl', h('thead', h('tr', h('th', 'Symbol'), h('th.r', 'Qty'), h('th.r', 'Avg'), h('th.r', 'Price'), h('th.r', 'Cost'), h('th', 'In Portfolio'))),
-        h('tbody', plan.map(p => h('tr', h('td', p.x.symbol, p.x.isin ? h('div.narr', p.x.isin) : null), h('td.r', String(p.x.qty)), h('td.r.amt', money(p.x.avg)), h('td.r.amt', money(p.x.ltp)), h('td.r.amt', money(p.x.cost)),
+        h('tbody', plan.map(p => h('tr', h('td', p.x.name || p.x.symbol, p.x.isin ? h('div.narr', p.x.isin) : null), h('td.r', String(p.x.qty)), h('td.r.amt', p.x.noCost ? '—' : money(p.x.avg)), h('td.r.amt', money(p.x.ltp)), h('td.r.amt', p.x.noCost ? '—' : money(p.x.cost)),
           h('td', p.action === 'price' ? h('span.pill.ok', 'price updated' + (Math.abs(p.held - p.x.qty) > 1e-9 ? ' · you hold ' + p.held + ' here' : '')) : p.action === 'create' ? h('span.pill.gold', 'will be added') : h('span.pill.gold', 'holding will be added'))))))),
       toAdd ? howBox : null,
       toAdd ? h('div.grid.g2', { style: { marginTop: '10px' } }, field('Bought on (approximate) for the ones being added', since, 'The date decides short or long term. You can correct each one later in Portfolio.')) : null,
-      h('p.small.muted', 'Shares you already track only get today’s price. New ones are added as “already owned” at Zerodha’s average cost — part of the Stocks account’s starting balance, no money moves.')),
+      dp ? h('div.note', 'The DP statement has quantities and today’s rate but no buy price. Shares you already track get the new price; for new ones the cost is taken as today’s value — correct the purchase price later in Portfolio if you know it (it matters for capital gains).') : null,
+      h('p.small.muted', 'Shares you already track only get today’s price. New ones are added as “already owned” at ' + (dp ? 'today’s value' : 'Zerodha’s average cost') + ' — part of the Stocks account’s starting balance, no money moves.')),
     foot: [h('button.btn', { onclick: () => md.close() }, 'Cancel'), h('button.btn.primary', { onclick: async () => {
       if (toAdd && !since.value) return toast('Enter the approximate purchase date');
       if (toAdd && how.mode === 'paid' && !how.pay) return toast('Choose where the money came from');
@@ -565,18 +701,18 @@ export async function importHoldings() {
       };
       const stocks = await store.ensureLedgerNamed(e.id, 'invest', 'Stocks');
       for (const p of plan) {
-        const etf = /BEES$|ETF$/i.test(p.x.symbol);
+        const etf = /BEES$|ETF$/i.test(p.x.symbol) || /^INF/i.test(p.x.isin || '');
         if (p.action === 'create') {
           const id = uid('ast');
-          ops.push({ store: 'assets', put: { id, entityId: e.id, name: p.x.symbol, type: etf ? 'etf' : 'equity', symbol: p.x.symbol.toUpperCase(), isin: p.x.isin || '', ledgerId: stocks.id, price: p.x.ltp, priceDate: today(), priceSource: 'zerodha',
+          ops.push({ store: 'assets', put: { id, entityId: e.id, name: p.x.name || p.x.symbol, type: etf ? 'etf' : 'equity', symbol: p.x.symbol.toUpperCase(), isin: p.x.isin || '', ledgerId: stocks.id, price: p.x.ltp, priceDate, priceSource: 'zerodha', costUnknown: !!p.x.noCost,
             openingLots: lotOrBuy(id, p.x), events: [], archived: false, createdAt: nowISO(), updatedAt: nowISO() } });
         } else if (p.action === 'lots') {
-          ops.push({ store: 'assets', put: { ...p.a, price: p.x.ltp || p.a.price, priceDate: today(), openingLots: [...(p.a.openingLots || []), ...lotOrBuy(p.a.id, p.x)], updatedAt: nowISO() } });
-        } else if (p.x.ltp) ops.push({ store: 'assets', put: { ...p.a, price: p.x.ltp, priceDate: today(), priceSource: 'zerodha', updatedAt: nowISO() } });
+          ops.push({ store: 'assets', put: { ...p.a, isin: p.a.isin || p.x.isin || '', price: p.x.ltp || p.a.price, priceDate, openingLots: [...(p.a.openingLots || []), ...lotOrBuy(p.a.id, p.x)], updatedAt: nowISO() } });
+        } else if (p.x.ltp) ops.push({ store: 'assets', put: { ...p.a, isin: p.a.isin || p.x.isin || '', price: p.x.ltp, priceDate, priceSource: 'zerodha', updatedAt: nowISO() } });
       }
       const old = S.holdings.filter(x => x.entityId === e.id && x.source === 'zerodha');
       ops.push(...old.map(x => ({ store: 'holdings', del: x.id })));
-      for (const x of res.items) ops.push({ store: 'holdings', put: { id: uid('hld'), entityId: e.id, ledgerId: stocks.id, name: x.symbol, isin: x.isin, type: 'Stocks', qty: x.qty, avg: x.avg, ltp: x.ltp, cost: x.cost, value: x.value, broker: 'Zerodha', source: 'zerodha', asOf: today(), createdAt: nowISO() } });
+      for (const x of res.items) ops.push({ store: 'holdings', put: { id: uid('hld'), entityId: e.id, ledgerId: stocks.id, name: x.name || x.symbol, isin: x.isin, type: 'Stocks', qty: x.qty, avg: x.avg, ltp: x.ltp, cost: x.cost, value: x.value, broker: 'Zerodha', source: 'zerodha', asOf: priceDate, createdAt: nowISO() } });
       await store.commit(ops);
       if (buys.length) {
         const vs = buys.map(b => newVoucher(e.id, { type: 'payment', src: 'investment', date: since.value, narration: 'Bought ' + b.x.symbol + ' (from holdings import)',

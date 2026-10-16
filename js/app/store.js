@@ -7,14 +7,16 @@ import { validateVoucher, nextNumber, newVoucher } from '../core/vouchers.js';
 import { buildDemo } from '../core/demo.js';
 import { uid, nowISO, clone } from '../lib/util.js';
 import { today, fyOf } from '../lib/dates.js';
+import { mergeSync, renumberDuplicates, crossDeviceDuplicates, stampOf } from '../core/sync.js';
 
-export const APP_VERSION = '1.3.1';
+export const APP_VERSION = '1.4.0';
 export const SCHEMA_VERSION = 4;
 const COLLS = ['entities', 'groups', 'ledgers', 'vouchers', 'rules', 'recurring', 'shortcuts', 'batches', 'holdings', 'taxpnl', 'assets'];
 
 export const S = {
   entities: [], groups: [], ledgers: [], vouchers: [], rules: [], recurring: [], shortcuts: [], batches: [], holdings: [], taxpnl: [], assets: [],
-  settings: {}, persistence: null, version: 0
+  settings: {}, persistence: null, version: 0,
+  tombstones: {}, seed: null /* sync: deletions to pass on; ids + time of this device's untouched starter data */
 };
 const DEFAULT_SETTINGS = { activeEntityId: '', theme: 'auto', hideAmounts: false, proMode: false, lastBackupAt: '', fy: fyOf(today()), owners: ['Me', 'Spouse', 'Joint'], defaultMoney: {}, lastSnapshotAt: '', caMode: false, onlinePrices: false, detailedEntry: false };
 
@@ -71,6 +73,8 @@ export async function init() {
   COLLS.forEach((c, i) => { S[c] = lists[i]; });
   const m = Object.fromEntries(meta.map(x => [x.key, x.value]));
   S.settings = { ...DEFAULT_SETTINGS, ...(m.settings || {}) };
+  S.tombstones = m.tombstones || {};
+  S.seed = m.seed || null;
   let schema = m.schema || 0;
   if (!S.entities.length) { await firstRun(); schema = SCHEMA_VERSION; }
   if (schema > SCHEMA_VERSION) throw new Error(`This data was saved by a newer version of the app (schema ${schema}). Update the app before opening it.`);
@@ -98,6 +102,9 @@ async function firstRun() {
   S.settings.activeEntityId = demo.entity.id;
   S.settings.firstRun = true;
   ops.push({ store: 'meta', put: { key: 'settings', value: S.settings } });
+  /* remember the starter records: a device still holding only these takes the other device's data on its first sync */
+  S.seed = { at: nowISO(), ids: ops.filter(o => o.put && o.put.id && COLLS.includes(o.store)).map(o => o.put.id) };
+  ops.push({ store: 'meta', put: { key: 'seed', value: S.seed } });
   await DB.write(ops);
 }
 function demoOps() {
@@ -149,7 +156,37 @@ function applyMem(store, rec, del) {
   if (del) { if (i >= 0) arr.splice(i, 1); }
   else if (i >= 0) arr[i] = rec; else arr.push(rec);
 }
+/* ---------- sync clock + change tracking ----------
+   Every saved record gets updatedAt from a clock that never runs backwards (nor behind anything seen from the
+   other device); every delete leaves a tombstone. That is what lets two devices merge record by record. */
+const CLOCK_KEY = 'dwb_clock';
+let clockMs = 0;
+function readClock() { try { return Number(localStorage.getItem(CLOCK_KEY)) || 0; } catch { return clockMs; } }
+function writeClock(ms) { clockMs = ms; try { localStorage.setItem(CLOCK_KEY, String(ms)); } catch { /* storage blocked */ } }
+export function stamp() {
+  const last = Math.max(clockMs, readClock());
+  const t = Math.max(Date.now(), last + 1);
+  writeClock(t);
+  return new Date(t).toISOString();
+}
+function observeStamp(iso) {
+  const ms = Date.parse(iso); if (!ms) return;
+  const cap = Date.now() + 7 * 864e5; /* ignore absurd clocks on the other device */
+  const t = Math.min(ms, cap);
+  if (t > Math.max(clockMs, readClock())) writeClock(t);
+}
+function trackOps(ops) {
+  let tomb = false; const t = stamp();
+  for (const o of ops) {
+    if (!COLLS.includes(o.store)) continue;
+    if (o.del !== undefined) { (S.tombstones[o.store] = S.tombstones[o.store] || {})[o.del] = t; tomb = true; }
+    else if (o.put) { o.put.updatedAt = t; if (S.tombstones[o.store] && S.tombstones[o.store][o.put.id]) { delete S.tombstones[o.store][o.put.id]; tomb = true; } }
+  }
+  if (tomb) ops.push({ store: 'meta', put: { key: 'tombstones', value: S.tombstones } });
+}
 export async function commit(ops) {
+  ops = ops.slice();
+  trackOps(ops);
   await DB.write(ops);
   for (const o of ops) if (o.store !== 'audit' && o.store !== 'meta' && o.store !== 'backups') applyMem(o.store, o.del !== undefined ? o.del : o.put, o.del !== undefined);
   changed();
@@ -365,4 +402,71 @@ export async function ensureGainLedger(entityId, key) {
   const l = makeLedger({ entityId, groupId: g.id, name: def.name, system: key, taxTag: def.tag });
   await saveLedger(l);
   return l;
+}
+
+/* ---------- phone ⇄ laptop sync ---------- */
+/* true while this device holds nothing but its untouched starter data (fresh install) */
+export function isPristine() {
+  if (!S.seed) return false;
+  if (Object.values(S.tombstones).some(m => m && Object.keys(m).length)) return false;
+  const ids = new Set(S.seed.ids);
+  for (const c of COLLS) for (const r of S[c]) if (!ids.has(r.id) || stampOf(r) > S.seed.at) return false;
+  return true;
+}
+export function deviceName() {
+  try { const n = localStorage.getItem('dwb_device_name'); if (n) return n; } catch { /* ignore */ }
+  const ua = navigator.userAgent || '';
+  return /android/i.test(ua) ? 'Android phone' : /iphone|ipad/i.test(ua) ? 'iPhone / iPad' : /mac os/i.test(ua) ? 'Mac' : /windows/i.test(ua) ? 'Windows laptop' : 'This device';
+}
+export function syncPayload() {
+  const data = {}; for (const c of COLLS) data[c] = S[c];
+  return { app: 'DoctorWealth Books', kind: 'sync', format: 1, schema: SCHEMA_VERSION, appVersion: APP_VERSION, device: deviceName(), at: stamp(),
+    pristine: isPristine(), seedIds: S.seed ? S.seed.ids : [], tombstones: S.tombstones, active: S.settings.activeEntityId, data };
+}
+export function isSyncPayload(o) { return !!o && o.app === 'DoctorWealth Books' && o.kind === 'sync' && o.data && typeof o.data === 'object'; }
+/* Merge the other device's copy into this one. A snapshot is taken first (Settings → automatic snapshots). */
+/* opts.replace: this device gives up its own records and takes the other device's (used when the two were set up separately) */
+export async function applySync(remote, opts = {}) {
+  if (!isSyncPayload(remote)) throw new Error('This is not a DoctorWealth Books sync file.');
+  if ((remote.schema || 0) > SCHEMA_VERSION) throw new Error('The other device has a newer version of the app (' + remote.appVersion + '). Update this device first (reload the app).');
+  if ((remote.schema || 0) < SCHEMA_VERSION) throw new Error('The other device has an older version of the app (' + remote.appVersion + '). Open the app there and reload it to update, then sync again.');
+  const wasPristine = isPristine() || !!opts.replace;
+  /* two devices that were each set up and used separately share no people: merging would give two of everyone */
+  const shared = (remote.data.entities || []).some(e => S.entities.some(x => x.id === e.id));
+  if (!shared && !wasPristine && !remote.pristine) {
+    const e = new Error('These two devices were set up separately and each has its own records, so a merge would give two of every person. Choose which device’s records to keep: on the device whose records you do NOT need, use “Take the other device’s records”.');
+    e.code = 'SEPARATE'; throw e;
+  }
+  await snapshot((opts.replace ? 'Before replacing with records from ' : 'Before sync with ') + (remote.device || 'another device'));
+  const local = { data: Object.fromEntries(COLLS.map(c => [c, S[c]])), tombstones: opts.replace ? {} : S.tombstones, pristine: wasPristine,
+    seedIds: opts.replace ? COLLS.flatMap(c => S[c].map(r => r.id)) : S.seed ? S.seed.ids : [] };
+  const res = mergeSync(local, remote);
+  const ops = [];
+  for (const [c, list] of Object.entries(res.puts)) for (const r of list) ops.push({ store: c, put: r });
+  for (const [c, ids] of Object.entries(res.dels)) for (const id of ids) ops.push({ store: c, del: id });
+  ops.push({ store: 'meta', put: { key: 'tombstones', value: res.tombstones } });
+  if (wasPristine && !remote.pristine) ops.push({ store: 'meta', put: { key: 'seed', value: null } });
+  await DB.write(ops);
+  observeStamp(res.maxStamp); observeStamp(remote.at);
+  if (wasPristine && !remote.pristine) {
+    /* show the person the other device was showing */
+    const ents = remote.data.entities || [];
+    const pick = ents.find(e => e.id === remote.active) || ents.find(e => e.kind !== 'demo') || ents[0];
+    if (pick) await setSettings({ activeEntityId: pick.id });
+  }
+  await init();
+  /* the two devices may have handed out the same entry number: renumber the later one (same result on both) */
+  const renum = renumberDuplicates(S.vouchers, nextNumber);
+  if (renum.length) { await DB.write(renum.map(v => ({ store: 'vouchers', put: v }))); for (const v of renum) applyMem('vouchers', v, false); changed(); }
+  const result = { inN: res.inN, outN: res.outN, device: remote.device || '', at: nowISO(), replacedFresh: wasPristine && !remote.pristine, duplicates: crossDeviceDuplicates(S.vouchers, S.batches).length };
+  try { localStorage.setItem('dwb_last_sync', JSON.stringify(result)); } catch { /* ignore */ }
+  return result;
+}
+/* the same statement imported on both devices before syncing: remove the later copies */
+export async function removeCrossDeviceDuplicates() {
+  const extra = crossDeviceDuplicates(S.vouchers, S.batches);
+  if (!extra.length) return 0;
+  await snapshot('Before removing duplicates found by sync');
+  await commit(extra.map(v => ({ store: 'vouchers', del: v.id })));
+  return extra.length;
 }

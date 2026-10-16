@@ -65,7 +65,7 @@ export function renderSettings(root) {
         h('button.btn', { onclick: restoreBackup }, 'Restore from file…'),
         h('button.btn', { onclick: showSnapshots }, 'Automatic snapshots on this device'),
         h('a.btn', { href: '#/audit' }, 'Change history')),
-      h('p.small.muted', 'The app also keeps automatic copies before updates, restores and deletions (last 5, on this device). Laptop ↔ phone sync and a PIN lock come in a later phase.'))));
+      h('p.small.muted', 'The app also keeps automatic copies before updates, restores, deletions and syncs (last 5, on this device). To use the app on phone and laptop, see ', h('a', { href: '#/sync' }, 'Sync phone & laptop'), '.'))));
 }
 
 async function lockTo(e, date) {
