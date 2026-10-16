@@ -1,6 +1,7 @@
 /* Zerodha files, ported from DoctorWealth v11. Pure: callers pass sheet rows (arrays of arrays).
    Labels are matched by text, never by fixed cell references. */
 import { toPaise } from '../lib/money.js';
+import { parseDateAny } from '../lib/dates.js';
 
 function numCell(v) {
   if (typeof v === 'number') return isFinite(v) ? v : null;
@@ -110,6 +111,50 @@ export function parseHoldings(rows) {
   }
   if (!items.length) return { error: 'No holdings with quantity found in the file.' };
   return { items, cost: items.reduce((t, x) => t + x.cost, 0), value: items.reduce((t, x) => t + x.value, 0) };
+}
+
+/* ---------- Zerodha DP "Transaction with Holding Statement" (PDF) ----------
+   pages: output of groupPdfItems per page. Reads the "Holdings as on <date>" table:
+   ISIN Code | Company Name (often wrapped onto lines above/below) | Curr. Bal | Free Bal | … | Rate | Value.
+   The DP statement has no buy price, so cost is unknown (noCost: true; avg = today's rate). */
+const ISIN_RE = /^IN[EF0-9][A-Z0-9]{9}$/;
+export function holdingKey(n) {
+  return String(n || '').toUpperCase().replace(/\(.*?\)/g, '').replace(/\s*-\s*EQ.*$/, '').replace(/\s+EQ\b.*$/, '').replace(/-\s*(RS\.?\s*)?\d+\/-?$/, '').replace(/\b(LTD|LIMITED)\b/g, '').replace(/[^A-Z0-9]/g, '');
+}
+export function parseDpHoldings(pages) {
+  const rows = [], texts = [];
+  let asOf = '', started = false;
+  pages.forEach((lines, p) => {
+    for (const L of lines) {
+      const cells = L.cells, txt = cells.map(c => c.t).join(' ');
+      const m = /holdings as on\s*(\d{4}-\d{2}-\d{2}|\d{1,2}[/-]\w{2,3}[/-]\d{2,4})/i.exec(txt);
+      if (m) { started = true; asOf = parseDateAny(m[1]); continue; }
+      if (!started) continue;
+      if (/^total\b/i.test(txt.replace(/^\W+/, ''))) { started = false; continue; }
+      if (/isin code|company name/i.test(txt)) continue;
+      if (ISIN_RE.test(cells[0].t)) {
+        const nums = [], name = [];
+        for (const c of cells.slice(1)) { if (/^-?\d[\d,]*(\.\d+)?$/.test(c.t)) nums.push(parseFloat(c.t.replace(/,/g, ''))); else name.push(c.t); }
+        if (nums.length < 3) continue;
+        rows.push({ isin: cells[0].t, parts: name, qty: nums[0], rate: nums[nums.length - 2], value: nums[nums.length - 1], y: L.y, page: p, h: L.h || 6, above: [], below: [] });
+      } else if (!/^[\d.,\s]+$/.test(txt)) texts.push({ t: txt, y: L.y, page: p, h: L.h || 6 });
+    }
+  });
+  /* wrapped company names sit above and below their row: each text line goes to the nearest row on its page */
+  for (const tl of texts) {
+    let best = null, bd = 1e9;
+    for (const r of rows) { if (r.page !== tl.page) continue; const d = Math.abs(r.y - tl.y); if (d < bd) { bd = d; best = r; } }
+    if (best && bd <= tl.h * 2.6) (tl.y > best.y ? best.above : best.below).push(tl);
+  }
+  const items = rows.map(r => {
+    const parts = [...r.above.sort((a, b) => b.y - a.y).map(x => x.t), ...r.parts, ...r.below.sort((a, b) => b.y - a.y).map(x => x.t)];
+    let name = '';
+    for (const pt of parts.map(x => x.trim()).filter(Boolean)) name += (!name ? '' : (/-$/.test(name) || /^\//.test(pt) ? '' : ' ')) + pt;
+    const ltp = Math.round(r.rate * 100), value = Math.round(r.value * 100);
+    return { symbol: holdingKey(name) || r.isin, name: name.replace(/\s+/g, ' '), isin: r.isin, qty: r.qty, avg: ltp, ltp, cost: value, value, noCost: true };
+  });
+  if (!items.length) return { error: 'No “Holdings as on …” table found. Use the Zerodha DP “Transaction with Holding Statement” PDF, or the Kite holdings Excel.' };
+  return { items, asOf, cost: items.reduce((t, x) => t + x.cost, 0), value: items.reduce((t, x) => t + x.value, 0), source: 'dp' };
 }
 
 /* ---------- Tax P&L "Tradewise Exits" sheet: one row per closed trade, grouped in sections ----------

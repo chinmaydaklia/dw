@@ -71,3 +71,23 @@ test('Bank of Baroda e-statement: savings and loan accounts are split; loan sect
   assert.deepEqual([ln.opening, ln.closing, ln.totalDebit, ln.totalCredit, ln.arith], [-50000000, -49820000, 120000, 300000, 0]);
   assert.deepEqual([ln.detail.emi, ln.detail.rate], [300000, 8.5]);
 });
+
+import { parseDpHoldings, holdingKey } from '../js/import/zerodha.js';
+test('Zerodha DP holding statement PDF: holdings table with wrapped company names', () => {
+  const page = [
+    L(800, [[200, 330, 'Holdings as on 2026-07-31:']]),
+    L(786, [[10, 35, 'ISIN Code'], [75, 117, 'Company Name'], [140, 163, 'Curr. Bal'], [470, 482, 'Rate'], [530, 545, 'Value']], 5),
+    L(774, [[93, 117, 'ACME BANK-']], 5),
+    L(771, [[10, 49, 'INE000A01011'], [147, 165, '13.000'], [192, 210, '13.000'], [240, 255, '0.000'], [473, 495, '242.600'], [540, 565, '3153.800']], 5),
+    L(767, [[89, 121, 'EQ1/-']], 5),
+    L(757, [[10, 49, 'INF000K01012'], [60, 120, 'SAMPLE GOLD BEES'], [147, 165, '149.000'], [192, 210, '149.000'], [240, 255, '0.000'], [473, 495, '117.090'], [540, 565, '17446.410']], 5),
+    L(745, [[110, 130, 'Total:'], [147, 165, '162.000'], [540, 565, '20600.210']], 5)
+  ];
+  const r = parseDpHoldings([page]);
+  assert.equal(r.asOf, '2026-07-31');
+  assert.deepEqual(r.items.map(x => [x.isin, x.name, x.qty, x.ltp, x.value]), [
+    ['INE000A01011', 'ACME BANK-EQ1/-', 13, 24260, 315380], ['INF000K01012', 'SAMPLE GOLD BEES', 149, 11709, 1744641]]);
+  assert.equal(r.items[0].symbol, 'ACMEBANK');
+  assert.ok(r.items.every(x => x.noCost));
+  assert.deepEqual(['HDFC BANK-EQ1/-', 'SBI - EQ', 'LT FOODS-EQTY', 'TATA CONSULTANCY-1/-', 'HERO MOTOCO (RS.2/-)'].map(holdingKey), ['HDFCBANK', 'SBI', 'LTFOODS', 'TATACONSULTANCY', 'HEROMOTOCO']);
+});

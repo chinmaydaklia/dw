@@ -7,7 +7,7 @@ import * as store from '../app/store.js';
 import { S } from '../app/store.js';
 import { parseCSV, parseTableStatement, groupPdfItems, parsePdfStatement, BANK_NAMES } from '../import/statement-parse.js';
 import { planRows, rowToVoucher, makeBatch, ruleMatch, suggestKeyword } from '../import/statement-plan.js';
-import { parseTaxPnl, parseHoldings, parseTradewise, parseConsolePnl } from '../import/zerodha.js';
+import { parseTaxPnl, parseHoldings, parseTradewise, parseConsolePnl, parseDpHoldings, holdingKey } from '../import/zerodha.js';
 import { planZerodhaPnl, buildZerodhaPostings } from '../import/zerodha-plan.js';
 import { ASSET_TYPES } from '../core/invest.js';
 import { readWorkbook, readPdfItems } from '../import/libs.js';
@@ -28,7 +28,7 @@ export function renderImport(root) {
       tile('🏦', 'Bank statement', 'PDF (password OK), CSV, XLS, XLSX · SBI, BoB, HDFC, IDFC tuned + generic columns', () => importStatement()),
       tile('⇪', 'Old DoctorWealth data', 'Bring across accounts, income, expenses, loans and investments — every balance is checked', () => importLegacy()),
       tile('📈', 'Zerodha P&L', 'Tax P&L (taxpnl-….xlsx) or Console P&L — adds your sales, profits and F&O results', () => importZerodhaPnl()),
-      tile('📊', 'Zerodha holdings', 'Kite holdings Excel — adds shares to Portfolio and updates prices', () => importHoldings()),
+      tile('📊', 'Zerodha holdings', 'Kite holdings Excel, or the DP holding statement PDF — adds shares to Portfolio and updates prices', () => importHoldings()),
       tile('↺', 'Restore backup', 'A backup file from this app (replaces everything)', () => restoreBackup())));
   add(root, h('div.section-h', h('h2', 'Rules'), h('span.muted.small', 'a word in the bank description → category (you still check every row)'), h('span.spacer'), h('button.btn.sm', { onclick: () => editRule(null) }, '+ Rule')));
   const rules = S.rules.filter(r => r.entityId === e.id);
@@ -518,18 +518,48 @@ function editTaxSummary(f, res) {
   });
 }
 
+/* password for a protected PDF (Zerodha uses the PAN in capitals); used once, never stored */
+export function askPdfPassword(title, hint) {
+  return new Promise(resolve => {
+    let done = false;
+    const inp = h('input.inp', { type: 'password', autocomplete: 'off', autofocus: true });
+    const ok = () => { done = true; md.close(); resolve(inp.value); };
+    inp.addEventListener('keydown', ev => { if (ev.key === 'Enter') ok(); });
+    const md = openModal({ title, body: h('div.grid', h('p.small.muted', { style: { margin: 0 } }, hint || 'Used only to open the file on this device; not saved.'), inp),
+      foot: [h('button.btn', { onclick: () => md.close() }, 'Cancel'), h('button.btn.primary', { onclick: ok }, 'Open')], onClose: () => { if (!done) resolve(null); } });
+  });
+}
+async function readHoldingsPdf(f) {
+  let pw = '', title = 'This statement is password-protected';
+  for (;;) {
+    try { return parseDpHoldings((await readPdfItems(await f.arrayBuffer(), pw)).map(groupPdfItems)); }
+    catch (err) {
+      if (err.code !== 'PASSWORD_NEEDED' && err.code !== 'PASSWORD_WRONG') throw err;
+      if (err.code === 'PASSWORD_WRONG') title = 'Wrong password — try again';
+      pw = await askPdfPassword(title, 'Zerodha statements usually open with your PAN in capitals. Used only to open the file on this device; not saved.');
+      if (pw === null) return null;
+    }
+  }
+}
 export async function importHoldings() {
-  const f = await pickFile('.xlsx,.xls,.csv'); if (!f) return;
+  const f = await pickFile('.xlsx,.xls,.csv,.pdf,application/pdf'); if (!f) return;
   let res;
   try {
-    const rows = /\.csv$/i.test(f.name) ? parseCSV(await f.text()) : Object.values(await readWorkbook(await f.arrayBuffer()))[0];
-    res = parseHoldings(rows);
+    if (/\.pdf$/i.test(f.name)) { res = await readHoldingsPdf(f); if (!res) return; }
+    else {
+      const rows = /\.csv$/i.test(f.name) ? parseCSV(await f.text()) : Object.values(await readWorkbook(await f.arrayBuffer()))[0];
+      res = parseHoldings(rows);
+    }
   } catch (e) { return toast('Could not read the file: ' + e.message); }
   if (res.error) return openModal({ title: 'Not imported', body: h('div.note.warn', res.error) });
   const e = store.activeEntity();
   const c = store.ctx();
   const assets = store.assetsOf(e.id);
-  const match = x => assets.find(a => (x.isin && a.isin === x.isin) || (a.symbol && a.symbol === x.symbol.toUpperCase()));
+  const dp = res.source === 'dp', priceDate = res.asOf || today();
+  /* ISIN first, then symbol, then the company name reduced to a key ("HDFC BANK-EQ1/-" ~ "HDFCBANK") */
+  const match = x => assets.find(a => x.isin && a.isin === x.isin)
+    || assets.find(a => a.symbol && a.symbol === x.symbol.toUpperCase())
+    || assets.find(a => { const k = holdingKey(a.symbol || a.name), k2 = holdingKey(x.name || x.symbol); return k && k2 && (k === k2 || (k.length >= 6 && k2.length >= 6 && (k.startsWith(k2) || k2.startsWith(k)))); });
   const plan = res.items.map(x => {
     const a = match(x);
     const held = a ? valueAsset(a, c.vouchers).qty : 0;
@@ -546,14 +576,15 @@ export async function importHoldings() {
     h('label.check', h('input', { type: 'radio', name: 'hhow', onchange: () => { how.mode = 'paid'; drawHow(); } }), h('span', h('b', 'Bought recently with money from my Zerodha wallet / bank'), h('div.small.muted', 'Recorded as purchases, so the wallet goes down by the same amount — counted once.'))),
     payBox);
   const md = openModal({
-    title: 'Review holdings', sub: f.name + ' · ' + res.items.length + ' holdings · cost ' + money(res.cost) + ' · value ' + money(res.value), size: 'wide',
+    title: 'Review holdings', sub: f.name + ' · ' + res.items.length + ' holdings' + (dp ? ' as on ' + fmtDate(priceDate) + ' · value ' + money(res.value) : ' · cost ' + money(res.cost) + ' · value ' + money(res.value)), size: 'wide',
     body: h('div',
       h('div.tbl-wrap', { style: { maxHeight: '45vh', overflowY: 'auto' } }, h('table.tbl', h('thead', h('tr', h('th', 'Symbol'), h('th.r', 'Qty'), h('th.r', 'Avg'), h('th.r', 'Price'), h('th.r', 'Cost'), h('th', 'In Portfolio'))),
-        h('tbody', plan.map(p => h('tr', h('td', p.x.symbol, p.x.isin ? h('div.narr', p.x.isin) : null), h('td.r', String(p.x.qty)), h('td.r.amt', money(p.x.avg)), h('td.r.amt', money(p.x.ltp)), h('td.r.amt', money(p.x.cost)),
+        h('tbody', plan.map(p => h('tr', h('td', p.x.name || p.x.symbol, p.x.isin ? h('div.narr', p.x.isin) : null), h('td.r', String(p.x.qty)), h('td.r.amt', p.x.noCost ? '—' : money(p.x.avg)), h('td.r.amt', money(p.x.ltp)), h('td.r.amt', p.x.noCost ? '—' : money(p.x.cost)),
           h('td', p.action === 'price' ? h('span.pill.ok', 'price updated' + (Math.abs(p.held - p.x.qty) > 1e-9 ? ' · you hold ' + p.held + ' here' : '')) : p.action === 'create' ? h('span.pill.gold', 'will be added') : h('span.pill.gold', 'holding will be added'))))))),
       toAdd ? howBox : null,
       toAdd ? h('div.grid.g2', { style: { marginTop: '10px' } }, field('Bought on (approximate) for the ones being added', since, 'The date decides short or long term. You can correct each one later in Portfolio.')) : null,
-      h('p.small.muted', 'Shares you already track only get today’s price. New ones are added as “already owned” at Zerodha’s average cost — part of the Stocks account’s starting balance, no money moves.')),
+      dp ? h('div.note', 'The DP statement has quantities and today’s rate but no buy price. Shares you already track get the new price; for new ones the cost is taken as today’s value — correct the purchase price later in Portfolio if you know it (it matters for capital gains).') : null,
+      h('p.small.muted', 'Shares you already track only get today’s price. New ones are added as “already owned” at ' + (dp ? 'today’s value' : 'Zerodha’s average cost') + ' — part of the Stocks account’s starting balance, no money moves.')),
     foot: [h('button.btn', { onclick: () => md.close() }, 'Cancel'), h('button.btn.primary', { onclick: async () => {
       if (toAdd && !since.value) return toast('Enter the approximate purchase date');
       if (toAdd && how.mode === 'paid' && !how.pay) return toast('Choose where the money came from');
@@ -565,18 +596,18 @@ export async function importHoldings() {
       };
       const stocks = await store.ensureLedgerNamed(e.id, 'invest', 'Stocks');
       for (const p of plan) {
-        const etf = /BEES$|ETF$/i.test(p.x.symbol);
+        const etf = /BEES$|ETF$/i.test(p.x.symbol) || /^INF/i.test(p.x.isin || '');
         if (p.action === 'create') {
           const id = uid('ast');
-          ops.push({ store: 'assets', put: { id, entityId: e.id, name: p.x.symbol, type: etf ? 'etf' : 'equity', symbol: p.x.symbol.toUpperCase(), isin: p.x.isin || '', ledgerId: stocks.id, price: p.x.ltp, priceDate: today(), priceSource: 'zerodha',
+          ops.push({ store: 'assets', put: { id, entityId: e.id, name: p.x.name || p.x.symbol, type: etf ? 'etf' : 'equity', symbol: p.x.symbol.toUpperCase(), isin: p.x.isin || '', ledgerId: stocks.id, price: p.x.ltp, priceDate, priceSource: 'zerodha', costUnknown: !!p.x.noCost,
             openingLots: lotOrBuy(id, p.x), events: [], archived: false, createdAt: nowISO(), updatedAt: nowISO() } });
         } else if (p.action === 'lots') {
-          ops.push({ store: 'assets', put: { ...p.a, price: p.x.ltp || p.a.price, priceDate: today(), openingLots: [...(p.a.openingLots || []), ...lotOrBuy(p.a.id, p.x)], updatedAt: nowISO() } });
-        } else if (p.x.ltp) ops.push({ store: 'assets', put: { ...p.a, price: p.x.ltp, priceDate: today(), priceSource: 'zerodha', updatedAt: nowISO() } });
+          ops.push({ store: 'assets', put: { ...p.a, isin: p.a.isin || p.x.isin || '', price: p.x.ltp || p.a.price, priceDate, openingLots: [...(p.a.openingLots || []), ...lotOrBuy(p.a.id, p.x)], updatedAt: nowISO() } });
+        } else if (p.x.ltp) ops.push({ store: 'assets', put: { ...p.a, isin: p.a.isin || p.x.isin || '', price: p.x.ltp, priceDate, priceSource: 'zerodha', updatedAt: nowISO() } });
       }
       const old = S.holdings.filter(x => x.entityId === e.id && x.source === 'zerodha');
       ops.push(...old.map(x => ({ store: 'holdings', del: x.id })));
-      for (const x of res.items) ops.push({ store: 'holdings', put: { id: uid('hld'), entityId: e.id, ledgerId: stocks.id, name: x.symbol, isin: x.isin, type: 'Stocks', qty: x.qty, avg: x.avg, ltp: x.ltp, cost: x.cost, value: x.value, broker: 'Zerodha', source: 'zerodha', asOf: today(), createdAt: nowISO() } });
+      for (const x of res.items) ops.push({ store: 'holdings', put: { id: uid('hld'), entityId: e.id, ledgerId: stocks.id, name: x.name || x.symbol, isin: x.isin, type: 'Stocks', qty: x.qty, avg: x.avg, ltp: x.ltp, cost: x.cost, value: x.value, broker: 'Zerodha', source: 'zerodha', asOf: priceDate, createdAt: nowISO() } });
       await store.commit(ops);
       if (buys.length) {
         const vs = buys.map(b => newVoucher(e.id, { type: 'payment', src: 'investment', date: since.value, narration: 'Bought ' + b.x.symbol + ' (from holdings import)',
